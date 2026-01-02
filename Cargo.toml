@@ -1,6 +1,20 @@
 [package]
-name = "cloudreve-client"
+name = "cloudreve-sync"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "cloudreve_sync_sdk"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cloudreve_sync_client"
+path = "src/main.rs"
+
 [dependencies]
+lazy_static = "1.5.0"
+reqwest = { version = "0.13.1", features = ["json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.148"
+urlencoding = "2.1.3"
+
