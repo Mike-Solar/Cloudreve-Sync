@@ -33,14 +33,19 @@ async fn parse_api_response<T: DeserializeOwned>(
     if envelope.code != 0 {
         return Err(Box::new(CloudreveError::from_u32(envelope.code)));
     }
-    let data_value = envelope.data.ok_or_else(|| {
-        let message = format!("响应解析失败: status={} err=missing data body={}", status, text);
-        std::io::Error::new(std::io::ErrorKind::InvalidData, message)
-    })?;
-    let data = serde_json::from_value::<T>(data_value).map_err(|err| {
-        let message = format!("响应解析失败: status={} err={} body={}", status, err, text);
-        std::io::Error::new(std::io::ErrorKind::InvalidData, message)
-    })?;
+    let data = match envelope.data {
+        Some(value) => serde_json::from_value::<T>(value).map_err(|err| {
+            let message = format!("响应解析失败: status={} err={} body={}", status, err, text);
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+        })?,
+        None => {
+            let empty = serde_json::json!({});
+            serde_json::from_value::<T>(empty).map_err(|err| {
+                let message = format!("响应解析失败: status={} err=missing data {} body={}", status, err, text);
+                std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+            })?
+        }
+    };
     Ok(ApiResponse {
         data,
         code: envelope.code,
@@ -93,6 +98,13 @@ pub struct TokenPair {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub token: TokenPair,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoteEntry {
+    pub name: String,
+    pub uri: String,
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +196,27 @@ impl CloudreveClient {
                     size: item.size,
                     updated_at: item.updated_at,
                     metadata,
+                    is_dir,
+                });
+            }
+            if data.next_marker.is_none() {
+                break;
+            }
+            page += 1;
+        }
+        Ok(output)
+    }
+
+    pub async fn list_directory_entries(&self, uri: &str) -> Result<Vec<RemoteEntry>, Box<dyn Error>> {
+        let mut page = 1u32;
+        let mut output = Vec::new();
+        loop {
+            let data = self.list_files(uri, Some(page)).await?;
+            for item in data.files {
+                let is_dir = item.file_type == 1;
+                output.push(RemoteEntry {
+                    name: item.name,
+                    uri: item.path,
                     is_dir,
                 });
             }

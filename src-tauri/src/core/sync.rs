@@ -51,6 +51,13 @@ pub struct SyncEngine {
     log_store: LogStore,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SyncStats {
+    pub uploaded_bytes: u64,
+    pub downloaded_bytes: u64,
+    pub operations: u32,
+}
+
 impl SyncEngine {
     pub fn new(task: TaskRow, api_paths: ApiPaths, access_token: Option<String>, db_path: PathBuf) -> Self {
         let client = CloudreveClient::new(task.base_url.clone(), access_token, api_paths);
@@ -63,8 +70,9 @@ impl SyncEngine {
         }
     }
 
-    pub async fn sync_once(&self) -> Result<(), Box<dyn Error>> {
+    pub async fn sync_once(&self) -> Result<SyncStats, Box<dyn Error>> {
         let mut conn = Connection::open(&self.db_path)?;
+        let mut stats = SyncStats::default();
         let entries = list_entries_by_task(&conn, &self.task.task_id)?;
         let tombstones = list_tombstones(&conn, &self.task.task_id)?;
 
@@ -155,27 +163,36 @@ impl SyncEngine {
                     }
 
                     if local_changed {
-                        self.upload_local(&mut conn, local, remote).await?;
+                        self.upload_local(&mut conn, local, remote, &mut stats).await?;
                     } else if remote_changed {
-                        self.download_remote(&mut conn, local, remote).await?;
+                        self.download_remote(&mut conn, local, remote, &mut stats).await?;
                     }
                 }
                 (Some(local), None) => {
-                    self.upload_new_local(&mut conn, local).await?;
+                    self.upload_new_local(&mut conn, local, &mut stats).await?;
                 }
                 (None, Some(remote)) => {
-                    self.download_new_remote(&mut conn, remote).await?;
+                    self.download_new_remote(&mut conn, remote, &mut stats).await?;
                 }
                 (None, None) => {}
             }
         }
 
-        Ok(())
+        Ok(stats)
     }
 
-    async fn upload_new_local(&self, conn: &mut Connection, local: &LocalFileInfo) -> Result<(), Box<dyn Error>> {
+    async fn upload_new_local(
+        &self,
+        conn: &mut Connection,
+        local: &LocalFileInfo,
+        stats: &mut SyncStats,
+    ) -> Result<(), Box<dyn Error>> {
         let uri = build_remote_uri(&self.task.remote_root_uri, &local.relpath);
-        self.client.update_file_content(&uri, &fs::read(&local.abs_path)?).await?;
+        let content = fs::read(&local.abs_path)?;
+        self.client
+            .update_file_content(&uri, &content)
+            .await
+            .map_err(|err| format!("上传失败: {} ({})", local.relpath, err))?;
         self.patch_sync_metadata(&uri, local, None).await?;
         upsert_entry(conn, &EntryRow {
             task_id: self.task.task_id.clone(),
@@ -190,6 +207,8 @@ impl SyncEngine {
             state: "ok".to_string(),
         })?;
         self.log_db(conn, LogLevel::Info, "upload", &format!("上传新文件: {}", local.relpath))?;
+        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(content.len() as u64);
+        stats.operations = stats.operations.saturating_add(1);
         Ok(())
     }
 
@@ -198,8 +217,13 @@ impl SyncEngine {
         conn: &mut Connection,
         local: &LocalFileInfo,
         remote: &RemoteFileInfo,
+        stats: &mut SyncStats,
     ) -> Result<(), Box<dyn Error>> {
-        self.client.update_file_content(&remote.uri, &fs::read(&local.abs_path)?).await?;
+        let content = fs::read(&local.abs_path)?;
+        self.client
+            .update_file_content(&remote.uri, &content)
+            .await
+            .map_err(|err| format!("上传失败: {} ({})", local.relpath, err))?;
         self.patch_sync_metadata(&remote.uri, local, Some(remote)).await?;
         upsert_entry(conn, &EntryRow {
             task_id: self.task.task_id.clone(),
@@ -214,16 +238,27 @@ impl SyncEngine {
             state: "ok".to_string(),
         })?;
         self.log_db(conn, LogLevel::Info, "upload", &format!("上传更新: {}", local.relpath))?;
+        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(content.len() as u64);
+        stats.operations = stats.operations.saturating_add(1);
         Ok(())
     }
 
-    async fn download_new_remote(&self, conn: &mut Connection, remote: &RemoteFileInfo) -> Result<(), Box<dyn Error>> {
+    async fn download_new_remote(
+        &self,
+        conn: &mut Connection,
+        remote: &RemoteFileInfo,
+        stats: &mut SyncStats,
+    ) -> Result<(), Box<dyn Error>> {
         let target = Path::new(&self.task.local_root).join(&remote.relpath);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let bytes = self.client.download_file(&remote.uri).await?;
-        fs::write(&target, bytes)?;
+        let bytes = self
+            .client
+            .download_file(&remote.uri)
+            .await
+            .map_err(|err| format!("下载失败: {} ({})", remote.relpath, err))?;
+        fs::write(&target, &bytes)?;
         set_local_mtime(&target, remote.mtime_ms)?;
         upsert_entry(conn, &EntryRow {
             task_id: self.task.task_id.clone(),
@@ -238,6 +273,8 @@ impl SyncEngine {
             state: "ok".to_string(),
         })?;
         self.log_db(conn, LogLevel::Info, "download", &format!("下载新文件: {}", remote.relpath))?;
+        stats.downloaded_bytes = stats.downloaded_bytes.saturating_add(bytes.len() as u64);
+        stats.operations = stats.operations.saturating_add(1);
         Ok(())
     }
 
@@ -246,9 +283,14 @@ impl SyncEngine {
         conn: &mut Connection,
         local: &LocalFileInfo,
         remote: &RemoteFileInfo,
+        stats: &mut SyncStats,
     ) -> Result<(), Box<dyn Error>> {
-        let bytes = self.client.download_file(&remote.uri).await?;
-        fs::write(&local.abs_path, bytes)?;
+        let bytes = self
+            .client
+            .download_file(&remote.uri)
+            .await
+            .map_err(|err| format!("下载失败: {} ({})", local.relpath, err))?;
+        fs::write(&local.abs_path, &bytes)?;
         set_local_mtime(&local.abs_path, remote.mtime_ms)?;
         upsert_entry(conn, &EntryRow {
             task_id: self.task.task_id.clone(),
@@ -263,6 +305,8 @@ impl SyncEngine {
             state: "ok".to_string(),
         })?;
         self.log_db(conn, LogLevel::Info, "download", &format!("下载更新: {}", local.relpath))?;
+        stats.downloaded_bytes = stats.downloaded_bytes.saturating_add(bytes.len() as u64);
+        stats.operations = stats.operations.saturating_add(1);
         Ok(())
     }
 
@@ -290,7 +334,10 @@ impl SyncEngine {
         fs::copy(&local.abs_path, &conflict_abs)?;
 
         let conflict_uri = build_remote_uri(&self.task.remote_root_uri, &conflict_relpath);
-        self.client.update_file_content(&conflict_uri, &fs::read(&conflict_abs)?).await?;
+        self.client
+            .update_file_content(&conflict_uri, &fs::read(&conflict_abs)?)
+            .await
+            .map_err(|err| format!("上传失败: {} ({})", conflict_relpath, err))?;
         self.patch_conflict_metadata(&conflict_uri, local, remote).await?;
 
         insert_conflict(conn, &ConflictRow {

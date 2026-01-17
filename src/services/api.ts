@@ -6,7 +6,8 @@ import type {
   ActivityItem,
   AccountItem,
   AppSettings,
-  DiagnosticInfo
+  DiagnosticInfo,
+  RemoteEntry
 } from "./types";
 
 export interface LoginRequest {
@@ -45,6 +46,16 @@ export interface LogsQuery {
 
 export interface SyncRequest {
   task_id: string;
+}
+
+export interface DeleteTaskRequest {
+  task_id: string;
+}
+
+export interface ListRemoteEntriesRequest {
+  account_key: string;
+  base_url: string;
+  uri: string;
 }
 
 export async function login(payload: LoginRequest): Promise<LoginResult> {
@@ -95,6 +106,10 @@ export async function listConflicts(task_id?: string): Promise<ConflictItem[]> {
   return invoke("list_conflicts_command", { task_id });
 }
 
+export async function listRemoteEntries(payload: ListRemoteEntriesRequest): Promise<RemoteEntry[]> {
+  return invoke("list_remote_entries_command", { payload });
+}
+
 export async function markConflictResolved(task_id: string, conflict_relpath: string) {
   return invoke("mark_conflict_resolved", { task_id, conflict_relpath });
 }
@@ -132,6 +147,10 @@ export async function runSync(payload: SyncRequest) {
 
 export async function stopSync(payload: SyncRequest) {
   return invoke("stop_sync_command", { payload });
+}
+
+export async function deleteTask(payload: DeleteTaskRequest) {
+  return invoke("delete_task_command", { payload });
 }
 
 export async function fetchBootstrap(): Promise<BootstrapPayload> {

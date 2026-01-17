@@ -39,6 +39,12 @@ export interface ConflictItem {
   status: string;
 }
 
+export type RemoteEntry = {
+  name: string;
+  uri: string;
+  is_dir: boolean;
+};
+
 export interface AccountItem {
   account_key: string;
   base_url: string;

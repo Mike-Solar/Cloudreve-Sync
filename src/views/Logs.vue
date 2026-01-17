@@ -9,6 +9,7 @@
         <div class="log-actions">
           <el-button @click="refresh">刷新</el-button>
           <el-button type="primary" plain @click="exportLogFile">导出日志</el-button>
+          <el-switch v-model="autoRefresh" active-text="实时刷新" />
         </div>
       </div>
       <div class="log-filters">
@@ -31,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { ActivityItem } from "../services/types";
 import { exportLogs, listLogs, openLocalPath } from "../services/api";
 import { ElMessage } from "element-plus";
@@ -40,6 +41,8 @@ const logs = ref<ActivityItem[]>([]);
 const search = ref("");
 const level = ref("");
 const taskId = ref("");
+let refreshTimer: number | null = null;
+const autoRefresh = ref(true);
 
 const refresh = async () => {
   logs.value = await listLogs({
@@ -60,7 +63,50 @@ const filtered = computed(() => {
   });
 });
 
-onMounted(refresh);
+const startAutoRefresh = () => {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer);
+  }
+  refreshTimer = window.setInterval(refresh, 1000);
+};
+
+const stopAutoRefresh = () => {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+};
+
+const pauseAutoRefresh = () => {
+  if (autoRefresh.value) {
+    stopAutoRefresh();
+  }
+};
+
+const resumeAutoRefresh = () => {
+  if (autoRefresh.value) {
+    startAutoRefresh();
+  }
+};
+
+onMounted(() => {
+  refresh();
+  if (autoRefresh.value) {
+    startAutoRefresh();
+  }
+});
+
+watch(autoRefresh, value => {
+  if (value) {
+    startAutoRefresh();
+  } else {
+    stopAutoRefresh();
+  }
+});
+
+onBeforeUnmount(() => {
+  stopAutoRefresh();
+});
 
 const exportLogFile = async () => {
   const path = await exportLogs({
@@ -70,4 +116,22 @@ const exportLogFile = async () => {
   await openLocalPath(path);
   ElMessage.success("日志已导出");
 };
+
+watch(search, value => {
+  if (value) {
+    pauseAutoRefresh();
+  } else {
+    resumeAutoRefresh();
+  }
+});
+
+watch(taskId, () => {
+  pauseAutoRefresh();
+  refresh().finally(resumeAutoRefresh);
+});
+
+watch(level, () => {
+  pauseAutoRefresh();
+  refresh().finally(resumeAutoRefresh);
+});
 </script>

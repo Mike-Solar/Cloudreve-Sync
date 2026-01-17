@@ -205,6 +205,15 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskRow>> {
     Ok(out)
 }
 
+pub fn delete_task(conn: &Connection, task_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM entries WHERE task_id = ?1", params![task_id])?;
+    conn.execute("DELETE FROM tombstones WHERE task_id = ?1", params![task_id])?;
+    conn.execute("DELETE FROM conflicts WHERE task_id = ?1", params![task_id])?;
+    conn.execute("DELETE FROM logs WHERE task_id = ?1", params![task_id])?;
+    conn.execute("DELETE FROM tasks WHERE task_id = ?1", params![task_id])?;
+    Ok(())
+}
+
 pub fn upsert_entry(conn: &Connection, entry: &EntryRow) -> Result<()> {
     conn.execute(
         "INSERT INTO entries (task_id, local_relpath, cloud_file_id, cloud_uri, last_local_mtime_ms, last_local_sha256, last_remote_mtime_ms, last_remote_sha256, last_sync_ts_ms, state) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(task_id, local_relpath) DO UPDATE SET cloud_file_id=excluded.cloud_file_id, cloud_uri=excluded.cloud_uri, last_local_mtime_ms=excluded.last_local_mtime_ms, last_local_sha256=excluded.last_local_sha256, last_remote_mtime_ms=excluded.last_remote_mtime_ms, last_remote_sha256=excluded.last_remote_sha256, last_sync_ts_ms=excluded.last_sync_ts_ms, state=excluded.state",

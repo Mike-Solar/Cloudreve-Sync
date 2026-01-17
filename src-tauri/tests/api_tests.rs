@@ -175,3 +175,28 @@ async fn refresh_token_returns_new_pair() {
     assert_eq!(result.refresh_token, "refresh-new");
     mock.assert();
 }
+
+#[tokio::test]
+async fn list_directory_entries_returns_dirs_and_files() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET)
+            .path("/api/v4/file")
+            .query_param("uri", "cloudreve://my/Work")
+            .query_param("page", "1");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(r#"{"code":0,"data":{"files":[{"type":1,"id":"d1","name":"Docs","size":0,"updated_at":"2024-01-01T00:00:00Z","path":"cloudreve://my/Work/Docs","metadata":{}} ,{"type":0,"id":"f1","name":"a.txt","size":1,"updated_at":"2024-01-01T00:00:00Z","path":"cloudreve://my/Work/a.txt","metadata":{}}],"next_marker":null},"msg":""}"#);
+    });
+
+    let api_paths = ApiPaths::default();
+    let client = CloudreveClient::new(server.url("/api/v4"), None, api_paths);
+    let entries = client
+        .list_directory_entries("cloudreve://my/Work")
+        .await
+        .expect("entries");
+    assert_eq!(entries.len(), 2);
+    assert!(entries[0].is_dir);
+    assert!(!entries[1].is_dir);
+    mock.assert();
+}

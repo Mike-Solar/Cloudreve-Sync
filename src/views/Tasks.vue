@@ -27,7 +27,7 @@
           <el-button size="small" @click="toggleSync(row)">
             {{ row.status === "Syncing" ? "暂停" : "同步" }}
           </el-button>
-          <el-button size="small" plain @click="refresh">刷新</el-button>
+          <el-button size="small" plain @click="removeTask(row)">移除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -48,6 +48,7 @@
           clearable
           @change="applyAccountSelection"
         >
+          <el-option :key="NEW_ACCOUNT_KEY" label="连接新账号" :value="NEW_ACCOUNT_KEY" />
           <el-option
             v-for="item in accounts"
             :key="item.account_key"
@@ -97,8 +98,16 @@
 
       <div class="wizard-body" v-else-if="step === 1">
         <el-input v-model="wizard.task_name" placeholder="任务名称" />
-        <el-input v-model="wizard.local_root" placeholder="本地目录" />
-        <el-input v-model="wizard.remote_root_uri" placeholder="云端目录 (URI 或路径)" />
+        <el-input v-model="wizard.local_root" placeholder="本地目录">
+          <template #append>
+            <el-button @click="browseLocalRoot">浏览</el-button>
+          </template>
+        </el-input>
+        <el-input v-model="wizard.remote_root_uri" placeholder="云端目录 (URI 或路径)">
+          <template #append>
+            <el-button :disabled="!wizard.account_key" @click="openRemoteBrowser">浏览</el-button>
+          </template>
+        </el-input>
       </div>
 
       <div class="wizard-body" v-else-if="step === 2">
@@ -125,7 +134,9 @@
           <el-button v-if="step < 3" type="primary" :loading="nextLoading" @click="goNext">
             下一步
           </el-button>
-          <el-button v-else type="primary" @click="submitTask">创建任务</el-button>
+          <el-button v-else type="primary" :loading="createLoading" @click="submitTask">
+            创建任务
+          </el-button>
         </div>
       </template>
     </el-dialog>
@@ -149,17 +160,54 @@
         </div>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="remoteBrowserVisible" title="选择云端目录" width="640px">
+      <div class="wizard-body">
+        <div class="remote-browser-header">
+          <el-button size="small" plain @click="goRemoteParent">上一级</el-button>
+          <span class="remote-browser-path">{{ remoteBrowserUri }}</span>
+        </div>
+        <el-table :data="remoteBrowserEntries" height="320" v-loading="remoteBrowserLoading">
+          <el-table-column label="名称">
+            <template #default="{ row }">
+              <span>{{ row.name }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="类型" width="120">
+            <template #default="{ row }">
+              {{ row.is_dir ? "目录" : "文件" }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="140">
+            <template #default="{ row }">
+              <el-button size="small" :disabled="!row.is_dir" @click="enterRemote(row)">
+                打开
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <template #footer>
+        <div class="wizard-footer">
+          <el-button @click="remoteBrowserVisible = false">取消</el-button>
+          <el-button type="primary" @click="selectRemoteCurrent">选择当前目录</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
-import type { TaskItem, AccountItem } from "../services/types";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { TaskItem, AccountItem, RemoteEntry } from "../services/types";
 import {
   createTask,
+  deleteTask,
   fetchBootstrap,
   finishSignInWith2fa,
+  listRemoteEntries,
   listAccounts,
   listTasks,
   login,
@@ -187,6 +235,14 @@ const twoFaVisible = ref(false);
 const twoFaCode = ref("");
 const twoFaSessionId = ref("");
 const twoFaLoading = ref(false);
+const remoteBrowserVisible = ref(false);
+const remoteBrowserEntries = ref<RemoteEntry[]>([]);
+const remoteBrowserUri = ref("cloudreve://my");
+const remoteBrowserLoading = ref(false);
+const createLoading = ref(false);
+let refreshTimer: number | null = null;
+
+const NEW_ACCOUNT_KEY = "__new__";
 
 const wizard = ref({
   base_url: "",
@@ -211,7 +267,10 @@ const loadAccounts = async () => {
   accounts.value = await listAccounts();
 };
 
-const usingExistingAccount = computed(() => selectedAccountKey.value !== "");
+const isNewAccountSelected = computed(() => selectedAccountKey.value === NEW_ACCOUNT_KEY);
+const usingExistingAccount = computed(
+  () => selectedAccountKey.value !== "" && !isNewAccountSelected.value
+);
 
 const filtered = computed(() => {
   return tasks.value.filter(item => {
@@ -311,6 +370,91 @@ const fetchCaptcha = async () => {
   }
 };
 
+const browseLocalRoot = async () => {
+  try {
+    const selected = (await open({
+      directory: true,
+      multiple: false,
+      title: "选择本地目录"
+    })) as string | string[] | null;
+    if (typeof selected === "string") {
+      wizard.value.local_root = selected;
+    } else if (Array.isArray(selected) && selected.length > 0) {
+      wizard.value.local_root = selected[0];
+    }
+  } catch (err) {
+    ElMessage.error(`打开本地目录失败：${formatError(err)}`);
+  }
+};
+
+const normalizeRemoteUri = (value: string) => {
+  if (!value) return "cloudreve://my";
+  if (value.startsWith("cloudreve://")) return value;
+  if (value.startsWith("/")) return `cloudreve://my${value}`;
+  return `cloudreve://my/${value}`;
+};
+
+const parentRemoteUri = (uri: string) => {
+  const trimmed = uri.startsWith("cloudreve://") ? uri.slice("cloudreve://".length) : uri;
+  const parts = trimmed.split("/").filter(Boolean);
+  if (parts.length <= 1) {
+    return `cloudreve://${parts[0] || "my"}`;
+  }
+  parts.pop();
+  return `cloudreve://${parts.join("/")}`;
+};
+
+const loadRemoteEntries = async () => {
+  if (!wizard.value.account_key) {
+    ElMessage.error("请先登录并验证连接");
+    return;
+  }
+  remoteBrowserLoading.value = true;
+  try {
+    const entries = await listRemoteEntries({
+      account_key: wizard.value.account_key,
+      base_url: wizard.value.base_url,
+      uri: remoteBrowserUri.value
+    });
+    remoteBrowserEntries.value = entries.sort((a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  } catch (err) {
+    ElMessage.error(`获取云端目录失败：${formatError(err)}`);
+  } finally {
+    remoteBrowserLoading.value = false;
+  }
+};
+
+const openRemoteBrowser = async () => {
+  if (!wizard.value.account_key) {
+    ElMessage.error("请先登录并验证连接");
+    return;
+  }
+  remoteBrowserUri.value = normalizeRemoteUri(wizard.value.remote_root_uri);
+  remoteBrowserVisible.value = true;
+  await loadRemoteEntries();
+};
+
+const enterRemote = async (entry: RemoteEntry) => {
+  if (!entry.is_dir) return;
+  remoteBrowserUri.value = entry.uri;
+  await loadRemoteEntries();
+};
+
+const goRemoteParent = async () => {
+  const parent = parentRemoteUri(remoteBrowserUri.value);
+  if (parent === remoteBrowserUri.value) return;
+  remoteBrowserUri.value = parent;
+  await loadRemoteEntries();
+};
+
+const selectRemoteCurrent = () => {
+  wizard.value.remote_root_uri = remoteBrowserUri.value;
+  remoteBrowserVisible.value = false;
+};
+
 const submitTwoFa = async () => {
   if (!twoFaCode.value.trim()) {
     ElMessage.error("请输入 2FA 验证码");
@@ -346,6 +490,17 @@ const submitTwoFa = async () => {
 };
 
 const applyAccountSelection = () => {
+  if (selectedAccountKey.value === NEW_ACCOUNT_KEY) {
+    selectedAccountKey.value = "";
+    wizard.value.account_key = "";
+    wizard.value.base_url = "";
+    wizard.value.email = "";
+    wizard.value.password = "";
+    wizard.value.captcha = "";
+    wizard.value.ticket = "";
+    captchaImage.value = null;
+    return;
+  }
   const account = accounts.value.find(item => item.account_key === selectedAccountKey.value);
   if (!account) {
     wizard.value.account_key = "";
@@ -401,26 +556,36 @@ const submitTask = async () => {
     ElMessage.error("请先登录并验证连接");
     return;
   }
-  await createTask({
-    name: wizard.value.task_name || "新任务",
-    base_url: wizard.value.base_url,
-    account_key: wizard.value.account_key,
-    local_root: wizard.value.local_root,
-    remote_root_uri: wizard.value.remote_root_uri,
-    mode: wizard.value.mode,
-    sync_interval_secs: wizard.value.sync_interval_secs
-  });
-  wizardVisible.value = false;
-  step.value = 0;
-  await refresh();
-  if (wizard.value.first_sync === "sync") {
-    const created = tasks.value.find(item => item.name === (wizard.value.task_name || "新任务"));
-    if (created) {
-      await runSync({ task_id: created.id });
-      await refresh();
+  try {
+    createLoading.value = true;
+    await createTask({
+      name: wizard.value.task_name || "新任务",
+      base_url: wizard.value.base_url,
+      account_key: wizard.value.account_key,
+      local_root: wizard.value.local_root,
+      remote_root_uri: wizard.value.remote_root_uri,
+      mode: wizard.value.mode,
+      sync_interval_secs: wizard.value.sync_interval_secs
+    });
+    wizardVisible.value = false;
+    step.value = 0;
+    onlyErrors.value = false;
+    onlyConflicts.value = false;
+    recent.value = false;
+    await refresh();
+    if (wizard.value.first_sync === "sync") {
+      const created = tasks.value.find(item => item.name === (wizard.value.task_name || "新任务"));
+      if (created) {
+        await runSync({ task_id: created.id });
+        await refresh();
+      }
     }
+    ElMessage.success("任务已创建");
+  } catch (err) {
+    ElMessage.error(`创建任务失败：${formatError(err)}`);
+  } finally {
+    createLoading.value = false;
   }
-  ElMessage.success("任务已创建");
 };
 
 const toggleSync = async (row: TaskItem) => {
@@ -432,10 +597,42 @@ const toggleSync = async (row: TaskItem) => {
   await refresh();
 };
 
+const removeTask = async (row: TaskItem) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要移除任务 “${row.name}” 吗？`,
+      "移除任务",
+      {
+        type: "warning",
+        confirmButtonText: "移除",
+        cancelButtonText: "取消"
+      }
+    );
+  } catch {
+    return;
+  }
+  try {
+    await deleteTask({ task_id: row.id });
+    await refresh();
+    ElMessage.success("任务已移除");
+  } catch (err) {
+    ElMessage.error(`移除失败：${formatError(err)}`);
+  }
+};
+
 onMounted(async () => {
   const data = await fetchBootstrap();
   tasks.value = data.tasks;
   await loadAccounts();
+  refreshTimer = window.setInterval(async () => {
+    await refresh();
+  }, 1000);
+});
+
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer);
+  }
 });
 
 watch(wizardVisible, visible => {

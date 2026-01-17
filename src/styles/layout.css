@@ -12,6 +12,8 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
+  position: relative;
+  z-index: 20;
 }
 
 .brand {
@@ -134,10 +136,20 @@
   display: flex;
   align-items: center;
   gap: 16px;
+  position: relative;
 }
 
 .search-input {
   width: 280px;
+}
+
+.search-results {
+  position: absolute;
+  top: 56px;
+  left: 0;
+  width: min(640px, 80vw);
+  z-index: 50;
+  box-shadow: 0 16px 32px rgba(19, 34, 28, 0.18);
 }
 
 .chip {
@@ -148,6 +160,10 @@
   border-radius: 999px;
   background: #efe6d9;
   color: var(--ink-strong);
+}
+
+.status-pill {
+  display: none;
 }
 
 .account {
@@ -230,7 +246,7 @@
 
 .task-row {
   display: grid;
-  grid-template-columns: 1.4fr 1fr auto;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(120px, auto);
   gap: 12px;
   align-items: center;
   padding: 12px;
@@ -245,21 +261,34 @@
 .task-path {
   color: var(--ink-muted);
   font-size: 12px;
+  word-break: break-all;
 }
 
 .task-meta {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  align-items: flex-start;
 }
 
 .task-actions {
   display: flex;
   gap: 8px;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+}
+
+.task-actions .el-button {
+  width: 120px;
 }
 
 .activity-timeline {
   margin-top: 12px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 .activity-item {

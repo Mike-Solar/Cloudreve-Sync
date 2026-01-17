@@ -7,10 +7,10 @@ use core::cloudreve::{
 use core::config::{ApiPaths, AppSettings, config_dir, ensure_dir};
 use core::credentials::{load_tokens, store_tokens};
 use core::db::{
-    create_task, delete_all_accounts, delete_conflict, init_db, list_accounts, list_conflicts, list_logs, list_tasks, now_ms,
-    upsert_account, AccountRow, TaskRow,
+    create_task, delete_all_accounts, delete_conflict, delete_task, init_db, list_accounts, list_conflicts, list_logs,
+    list_tasks, now_ms, upsert_account, AccountRow, TaskRow,
 };
-use core::sync::SyncEngine;
+use core::sync::{SyncEngine, SyncStats};
 use chrono::{Local, TimeZone};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{
     AppHandle,
     Manager,
@@ -41,6 +41,7 @@ struct AppState {
     db_path: PathBuf,
     api_paths: ApiPaths,
     runners: Mutex<HashMap<String, RunnerHandle>>,
+    stats: Arc<Mutex<HashMap<String, TaskStats>>>,
 }
 
 const TOKEN_REFRESH_INTERVAL_SECS: u64 = 20 * 60;
@@ -64,6 +65,13 @@ struct TaskItem {
     rate_down: String,
     queue: u32,
     last_sync: String,
+}
+
+#[derive(Clone, Debug)]
+struct TaskStats {
+    rate_up: String,
+    rate_down: String,
+    queue: u32,
 }
 
 #[derive(Serialize)]
@@ -161,6 +169,18 @@ struct LogsQuery {
 #[derive(Deserialize)]
 struct SyncRequest {
     task_id: String,
+}
+
+#[derive(Deserialize)]
+struct DeleteTaskRequest {
+    task_id: String,
+}
+
+#[derive(Deserialize)]
+struct ListRemoteEntriesRequest {
+    account_key: String,
+    base_url: String,
+    uri: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -311,6 +331,21 @@ fn list_accounts_command(state: tauri::State<AppState>) -> Result<Vec<AccountIte
             created_at_ms: item.created_at_ms,
         })
         .collect())
+}
+
+#[tauri::command]
+fn list_remote_entries_command(
+    state: tauri::State<AppState>,
+    payload: ListRemoteEntriesRequest,
+) -> Result<Vec<core::cloudreve::RemoteEntry>, String> {
+    let tokens = load_tokens(&payload.account_key).map_err(|err| err.to_string())?;
+    let client = CloudreveClient::new(
+        payload.base_url,
+        Some(tokens.access_token),
+        state.api_paths.clone(),
+    );
+    tauri::async_runtime::block_on(client.list_directory_entries(&payload.uri))
+        .map_err(|err| err.to_string())
 }
 #[tauri::command]
 fn list_conflicts_command(state: tauri::State<AppState>, task_id: Option<String>) -> Result<Vec<ConflictItem>, String> {
@@ -548,6 +583,7 @@ fn run_sync_command(state: tauri::State<AppState>, payload: SyncRequest) -> Resu
     let task_id = payload.task_id.clone();
     let db_path = state.db_path.clone();
     let api_paths = state.api_paths.clone();
+    let stats_map = state.stats.clone();
     let stop_for_thread = stop_flag.clone();
     thread::spawn(move || {
         let settings = match load_task_settings(&db_path, &task_id) {
@@ -563,10 +599,13 @@ fn run_sync_command(state: tauri::State<AppState>, payload: SyncRequest) -> Resu
             if stop_for_thread.load(Ordering::SeqCst) {
                 break;
             }
-            let result = run_sync_once(&db_path, &api_paths, &task_id);
-            if let Err(err) = result {
-                let detail = err.to_string();
-                log_error(&db_path, &task_id, &detail);
+            let start = Instant::now();
+            match run_sync_once(&db_path, &api_paths, &task_id) {
+                Ok(stats) => update_task_stats(&stats_map, &task_id, stats, start.elapsed()),
+                Err(err) => {
+                    let detail = err.to_string();
+                    log_error(&db_path, &task_id, &detail);
+                }
             }
             thread::sleep(Duration::from_secs(interval));
         }
@@ -581,6 +620,22 @@ fn stop_sync_command(state: tauri::State<AppState>, payload: SyncRequest) -> Res
     if let Some(handle) = runners.remove(&payload.task_id) {
         handle.stop.store(true, Ordering::SeqCst);
     }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_task_command(state: tauri::State<AppState>, payload: DeleteTaskRequest) -> Result<(), String> {
+    {
+        let mut runners = state.runners.lock().map_err(|_| "runner lock error".to_string())?;
+        if let Some(handle) = runners.remove(&payload.task_id) {
+            handle.stop.store(true, Ordering::SeqCst);
+        }
+    }
+    if let Ok(mut stats) = state.stats.lock() {
+        stats.remove(&payload.task_id);
+    }
+    let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+    delete_task(&conn, &payload.task_id).map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -663,12 +718,30 @@ fn bootstrap(state: tauri::State<AppState>) -> Result<BootstrapPayload, String> 
     })
 }
 
-fn run_sync_once(db_path: &PathBuf, api_paths: &ApiPaths, task_id: &str) -> Result<(), Box<dyn Error>> {
+fn run_sync_once(db_path: &PathBuf, api_paths: &ApiPaths, task_id: &str) -> Result<SyncStats, Box<dyn Error>> {
     let (task, settings) = load_task_settings(db_path, task_id)?;
     let tokens = load_tokens(&settings.account_key)?;
     let engine = SyncEngine::new(task, api_paths.clone(), Some(tokens.access_token), db_path.clone());
-    tauri::async_runtime::block_on(engine.sync_once())?;
-    Ok(())
+    tauri::async_runtime::block_on(engine.sync_once())
+}
+
+fn update_task_stats(
+    stats_map: &Arc<Mutex<HashMap<String, TaskStats>>>,
+    task_id: &str,
+    stats: SyncStats,
+    elapsed: Duration,
+) {
+    let secs = elapsed.as_secs_f64().max(0.001);
+    let rate_up = format_rate(stats.uploaded_bytes as f64 / secs);
+    let rate_down = format_rate(stats.downloaded_bytes as f64 / secs);
+    let snapshot = TaskStats {
+        rate_up,
+        rate_down,
+        queue: stats.operations,
+    };
+    if let Ok(mut map) = stats_map.lock() {
+        map.insert(task_id.to_string(), snapshot);
+    }
 }
 
 fn log_error(db_path: &PathBuf, task_id: &str, detail: &str) {
@@ -731,12 +804,31 @@ fn file_name(path: &str) -> String {
         .to_string()
 }
 
+fn format_rate(bytes_per_sec: f64) -> String {
+    if bytes_per_sec <= 0.0 {
+        return "0 B/s".to_string();
+    }
+    let units = ["B/s", "KB/s", "MB/s", "GB/s"];
+    let mut value = bytes_per_sec;
+    let mut idx = 0;
+    while value >= 1024.0 && idx < units.len() - 1 {
+        value /= 1024.0;
+        idx += 1;
+    }
+    if idx == 0 {
+        format!("{:.0} {}", value, units[idx])
+    } else {
+        format!("{:.1} {}", value, units[idx])
+    }
+}
+
 fn is_running(state: &AppState, task_id: &str) -> bool {
     state.runners.lock().map(|r| r.contains_key(task_id)).unwrap_or(false)
 }
 
 fn build_task_items(state: &AppState, conn: &Connection) -> Result<Vec<TaskItem>, Box<dyn Error>> {
     let tasks = list_tasks(conn)?;
+    let stats_map = state.stats.lock().map_err(|_| "stats lock error")?;
     let mut output = Vec::new();
     for task in tasks {
         let settings = parse_settings(&task.settings_json);
@@ -748,6 +840,11 @@ fn build_task_items(state: &AppState, conn: &Connection) -> Result<Vec<TaskItem>
         let last_sync = latest_log_time(conn, &task.task_id)
             .map(format_time)
             .unwrap_or_else(|| "--".to_string());
+        let stats = stats_map.get(&task.task_id).cloned().unwrap_or(TaskStats {
+            rate_up: "0 B/s".to_string(),
+            rate_down: "0 B/s".to_string(),
+            queue: 0,
+        });
         output.push(TaskItem {
             id: task.task_id.clone(),
             name: settings.name,
@@ -755,9 +852,9 @@ fn build_task_items(state: &AppState, conn: &Connection) -> Result<Vec<TaskItem>
             local_path: task.local_root.clone(),
             remote_path: task.remote_root_uri.clone(),
             status,
-            rate_up: "--".to_string(),
-            rate_down: "--".to_string(),
-            queue: 0,
+            rate_up: stats.rate_up,
+            rate_down: stats.rate_down,
+            queue: stats.queue,
             last_sync,
         });
     }
@@ -795,11 +892,15 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn Error>> {
                 let state = app.state::<AppState>();
                 let db_path = state.db_path.clone();
                 let api_paths = state.api_paths.clone();
+                let stats_map = state.stats.clone();
                 thread::spawn(move || {
                     if let Ok(conn) = Connection::open(&db_path) {
                         if let Ok(tasks) = list_tasks(&conn) {
                             for task in tasks {
-                                let _ = run_sync_once(&db_path, &api_paths, &task.task_id);
+                                let start = Instant::now();
+                                if let Ok(stats) = run_sync_once(&db_path, &api_paths, &task.task_id) {
+                                    update_task_stats(&stats_map, &task.task_id, stats, start.elapsed());
+                                }
                             }
                         }
                     }
@@ -904,10 +1005,12 @@ fn main() {
         db_path,
         api_paths: ApiPaths::default(),
         runners: Mutex::new(HashMap::new()),
+        stats: Arc::new(Mutex::new(HashMap::new())),
     };
 
     tauri::Builder::default()
         .manage(state)
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle();
             setup_tray(&handle)?;
@@ -929,6 +1032,7 @@ fn main() {
             create_task_command,
             list_tasks_command,
             list_accounts_command,
+            list_remote_entries_command,
             get_settings_command,
             save_settings_command,
             clear_credentials_command,
@@ -942,7 +1046,8 @@ fn main() {
             list_conflicts_command,
             list_logs_command,
             run_sync_command,
-            stop_sync_command
+            stop_sync_command,
+            delete_task_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

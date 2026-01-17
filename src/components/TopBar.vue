@@ -42,10 +42,6 @@
           暂无匹配结果
         </div>
       </el-card>
-      <div class="chip">
-        <span class="chip-label">网络</span>
-        <strong>稳定</strong>
-      </div>
       <el-dropdown>
         <span class="account">
           账户：{{ activeAccountLabel }}

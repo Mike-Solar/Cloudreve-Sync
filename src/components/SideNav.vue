@@ -14,10 +14,6 @@
       </RouterLink>
     </nav>
     <div class="nav-footer">
-      <div class="status-pill">
-        <span class="dot"></span>
-        API 在线
-      </div>
       <div class="hint">不会覆盖文件 · 冲突双保留</div>
     </div>
   </aside>

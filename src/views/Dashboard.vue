@@ -47,7 +47,7 @@
         </div>
         <el-timeline class="activity-timeline">
           <el-timeline-item
-            v-for="activity in activities"
+            v-for="activity in activities.slice(0, 10)"
             :key="activity.timestamp + activity.detail"
             :type="activityTone(activity.level)"
             :timestamp="activity.timestamp"
@@ -64,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import type { ActivityItem, DashboardCard, TaskItem } from "../services/types";
 import { fetchBootstrap } from "../services/bootstrap";
@@ -80,6 +80,20 @@ onMounted(async () => {
   cards.value = data.cards;
   tasks.value = data.tasks;
   activities.value = data.activities;
+  refreshTimer = window.setInterval(async () => {
+    const latest = await fetchBootstrap();
+    cards.value = latest.cards;
+    tasks.value = latest.tasks;
+    activities.value = latest.activities;
+  }, 1000);
+});
+
+let refreshTimer: number | null = null;
+
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer);
+  }
 });
 
 const statusTone = (status: string) => {
