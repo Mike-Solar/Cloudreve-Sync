@@ -951,9 +951,7 @@ fn setup_window_events(app: &AppHandle) {
 }
 
 fn db_path() -> Result<PathBuf, Box<dyn Error>> {
-    let proj = directories::ProjectDirs::from("org", "cloudreve", "CloudreveSync")
-        .ok_or("failed to locate config dir")?;
-    let path = proj.config_dir().join("cloudreve.db");
+    let path = config_dir()?.join("cloudreve.db");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

@@ -52,9 +52,8 @@ impl Default for AppConfig {
 }
 
 pub fn config_dir() -> Result<PathBuf, Box<dyn Error>> {
-    let proj = directories::ProjectDirs::from("org", "cloudreve", "CloudreveSync")
-        .ok_or("failed to locate config dir")?;
-    Ok(proj.config_dir().to_path_buf())
+    let base = directories::BaseDirs::new().ok_or("failed to locate config dir")?;
+    Ok(base.config_dir().join("cn.mikesolar.cloudreve-sync"))
 }
 
 pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {

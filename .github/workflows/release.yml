@@ -59,5 +59,4 @@ jobs:
             - 更新内容 1
             - 更新内容 2
           releaseDraft: true
-          releasePrerelease: false
 
