@@ -7,6 +7,7 @@ target/
 # Cargo.lock
 Cargo.lock
 
+dist/
 .codex
 AGENTS.md
 verification.md
