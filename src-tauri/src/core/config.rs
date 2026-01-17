@@ -8,6 +8,9 @@ pub struct ApiPaths {
     pub list_files: String,
     pub create_download: String,
     pub update_content: String,
+    pub create_upload_session: String,
+    pub upload_chunk: String,
+    pub patch_metadata: String,
     pub create_share_link: String,
     pub delete_file: String,
 }
@@ -15,9 +18,12 @@ pub struct ApiPaths {
 impl Default for ApiPaths {
     fn default() -> Self {
         Self {
-            list_files: "/file/list".to_string(),
-            create_download: "/file/download".to_string(),
+            list_files: "/file".to_string(),
+            create_download: "/file/url".to_string(),
             update_content: "/file/content".to_string(),
+            create_upload_session: "/file/upload".to_string(),
+            upload_chunk: "/file/upload".to_string(),
+            patch_metadata: "/file/metadata".to_string(),
             create_share_link: "/share".to_string(),
             delete_file: "/file".to_string(),
         }
@@ -27,12 +33,9 @@ impl Default for ApiPaths {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub base_url: String,
-    pub access_token: String,
-    pub refresh_token: String,
     pub local_root: String,
     pub remote_root: String,
     pub sync_interval_secs: u64,
-    pub use_placeholders: bool,
     pub api_paths: ApiPaths,
 }
 
@@ -40,12 +43,9 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             base_url: "https://example.com/api/v4".to_string(),
-            access_token: String::new(),
-            refresh_token: String::new(),
             local_root: String::new(),
             remote_root: "/".to_string(),
             sync_interval_secs: 60,
-            use_placeholders: true,
             api_paths: ApiPaths::default(),
         }
     }

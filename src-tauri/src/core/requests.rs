@@ -4,7 +4,7 @@ use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::hash::Hasher;
-use crate::error::CloudreveError;
+use crate::core::error::CloudreveError;
 
 pub mod auth;
 pub mod common;
@@ -149,5 +149,4 @@ where T: Serialize + for<'de> Deserialize<'de> + Clone{
         self.msg.clone()
     }
 }
-
 

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::error::Error;
 use serde::{Deserialize, Serialize};
-use crate::error::CloudreveError;
-use crate::requests::Connection;
-use crate::requests::Response;
-use crate::requests::user::User;
+use crate::core::error::CloudreveError;
+use crate::core::requests::Connection;
+use crate::core::requests::Response;
+use crate::core::requests::user::User;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CaptchaData{

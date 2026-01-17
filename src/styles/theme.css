@@ -1,0 +1,65 @@
+:root {
+  --bg-base: #f4efe6;
+  --bg-accent: #e5ddd2;
+  --panel: #fff8ef;
+  --ink-strong: #1a2f2a;
+  --ink-muted: #5a6b63;
+  --brand: #1f4f4a;
+  --brand-bright: #2a7f72;
+  --alert: #c1473d;
+  --warning: #c98c2e;
+  --success: #2f7d56;
+  --border-soft: #e1d7c9;
+  --shadow-soft: 0 18px 40px rgba(32, 51, 45, 0.08);
+  --radius-lg: 18px;
+  --radius-md: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Sora", "Space Grotesk", "IBM Plex Sans", "Helvetica Neue", sans-serif;
+  color: var(--ink-strong);
+  background: radial-gradient(circle at top right, #f8f4ec 0%, var(--bg-base) 45%, #e8dfd2 100%);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.el-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-soft);
+  background-color: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.el-button--primary {
+  background-color: var(--brand);
+  border-color: var(--brand);
+}
+
+.el-button--primary.is-plain {
+  color: var(--brand);
+  border-color: var(--brand);
+  background: transparent;
+}
+
+.el-tag--dark.el-tag--success {
+  background-color: var(--success);
+  border-color: var(--success);
+}
+
+.el-tag--dark.el-tag--warning {
+  background-color: var(--warning);
+  border-color: var(--warning);
+}
+
+.el-tag--dark.el-tag--danger {
+  background-color: var(--alert);
+  border-color: var(--alert);
+}
