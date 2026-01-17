@@ -69,11 +69,68 @@ pub fn logs_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(config_dir()?.join("sync.log.jsonl"))
 }
 
+pub fn settings_path() -> Result<PathBuf, Box<dyn Error>> {
+    Ok(config_dir()?.join("settings.json"))
+}
+
 pub fn ensure_dir(path: &Path) -> Result<(), Box<dyn Error>> {
     if !path.exists() {
         fs::create_dir_all(path)?;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    pub autostart: bool,
+    pub tray: bool,
+    pub language: String,
+    pub proxy: String,
+    pub retries: u32,
+    pub backoff: String,
+    pub upload: u32,
+    pub download: u32,
+    pub sha_threads: u32,
+    pub lock_pause: bool,
+    pub debug: bool,
+    pub trace: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            autostart: true,
+            tray: true,
+            language: "zh".to_string(),
+            proxy: String::new(),
+            retries: 5,
+            backoff: "指数退避".to_string(),
+            upload: 4,
+            download: 4,
+            sha_threads: 4,
+            lock_pause: false,
+            debug: false,
+            trace: false,
+        }
+    }
+}
+
+impl AppSettings {
+    pub fn load() -> Result<Self, Box<dyn Error>> {
+        let path = settings_path()?;
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    pub fn save(&self) -> Result<(), Box<dyn Error>> {
+        let path = settings_path()?;
+        ensure_dir(path.parent().ok_or("settings path invalid")?)?;
+        fs::write(path, serde_json::to_string_pretty(self)?)?;
+        Ok(())
+    }
 }
 
 impl AppConfig {

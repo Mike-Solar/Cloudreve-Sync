@@ -8,6 +8,7 @@
         </div>
         <div class="log-actions">
           <el-button @click="refresh">刷新</el-button>
+          <el-button type="primary" plain @click="exportLogFile">导出日志</el-button>
         </div>
       </div>
       <div class="log-filters">
@@ -32,7 +33,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import type { ActivityItem } from "../services/types";
-import { listLogs } from "../services/api";
+import { exportLogs, listLogs, openLocalPath } from "../services/api";
+import { ElMessage } from "element-plus";
 
 const logs = ref<ActivityItem[]>([]);
 const search = ref("");
@@ -59,4 +61,13 @@ const filtered = computed(() => {
 });
 
 onMounted(refresh);
+
+const exportLogFile = async () => {
+  const path = await exportLogs({
+    task_id: taskId.value || undefined,
+    level: level.value || undefined
+  });
+  await openLocalPath(path);
+  ElMessage.success("日志已导出");
+};
 </script>

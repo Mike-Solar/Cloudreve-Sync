@@ -10,3 +10,5 @@ Cargo.lock
 .codex
 AGENTS.md
 verification.md
+node_modules
+pnpm-lock.yaml

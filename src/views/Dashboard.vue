@@ -14,7 +14,7 @@
             <div class="panel-title">当前任务</div>
             <div class="panel-subtitle">最近活动的同步任务</div>
           </div>
-          <el-button type="primary" plain>查看全部</el-button>
+          <el-button type="primary" plain @click="gotoTasks">查看全部</el-button>
         </div>
         <div class="task-list">
           <div v-for="task in tasks" :key="task.id" class="task-row">
@@ -28,8 +28,10 @@
               <div class="task-queue">队列 {{ task.queue }}</div>
             </div>
             <div class="task-actions">
-              <el-button size="small">暂停</el-button>
-              <el-button size="small" type="primary">打开目录</el-button>
+              <el-button size="small" @click="toggleSync(task)">
+                {{ task.status === "Syncing" ? "暂停" : "同步" }}
+              </el-button>
+              <el-button size="small" type="primary" @click="openTaskFolder(task)">打开目录</el-button>
             </div>
           </div>
         </div>
@@ -41,7 +43,7 @@
             <div class="panel-title">最近活动</div>
             <div class="panel-subtitle">上传 / 下载 / 冲突 / 删除</div>
           </div>
-          <el-button type="primary" plain>导出日志</el-button>
+          <el-button type="primary" plain @click="gotoLogs">查看日志</el-button>
         </div>
         <el-timeline class="activity-timeline">
           <el-timeline-item
@@ -63,12 +65,15 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import type { ActivityItem, DashboardCard, TaskItem } from "../services/types";
 import { fetchBootstrap } from "../services/bootstrap";
+import { openLocalPath, runSync, stopSync } from "../services/api";
 
 const cards = ref<DashboardCard[]>([]);
 const tasks = ref<TaskItem[]>([]);
 const activities = ref<ActivityItem[]>([]);
+const router = useRouter();
 
 onMounted(async () => {
   const data = await fetchBootstrap();
@@ -88,5 +93,27 @@ const activityTone = (level: string) => {
   if (level === "warn") return "warning";
   if (level === "error") return "danger";
   return "success";
+};
+
+const gotoTasks = () => {
+  router.push("/tasks");
+};
+
+const gotoLogs = () => {
+  router.push("/logs");
+};
+
+const toggleSync = async (task: TaskItem) => {
+  if (task.status === "Syncing") {
+    await stopSync({ task_id: task.id });
+  } else {
+    await runSync({ task_id: task.id });
+  }
+  const data = await fetchBootstrap();
+  tasks.value = data.tasks;
+};
+
+const openTaskFolder = async (task: TaskItem) => {
+  await openLocalPath(task.local_path);
 };
 </script>

@@ -554,3 +554,138 @@ fn file_stem(path: &str) -> String {
         .unwrap_or(path)
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::db::now_ms;
+    use std::collections::HashSet;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn uri_path_strips_and_decodes() {
+        let uri = "cloudreve://root/Work/a%20b.txt?download=1";
+        let result = uri_path(uri);
+        assert_eq!(result, "/Work/a b.txt");
+    }
+
+    #[test]
+    fn build_remote_uri_encodes_segments() {
+        let root = "cloudreve://root/Work";
+        let result = build_remote_uri(root, "a b/c.txt");
+        assert_eq!(result, "cloudreve://root/Work/a%20b/c.txt");
+    }
+
+    #[test]
+    fn hash_file_matches_sha256() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("hello.txt");
+        let mut file = fs::File::create(&path).expect("create file");
+        file.write_all(b"hello").expect("write");
+        let result = hash_file(&path).expect("hash");
+        assert_eq!(
+            result,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn scan_local_collects_relpaths() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        let nested_dir = root.join("a");
+        fs::create_dir_all(&nested_dir).expect("mkdir");
+        fs::write(root.join("root.txt"), b"root").expect("write root");
+        fs::write(nested_dir.join("child.txt"), b"child").expect("write child");
+
+        let files = scan_local(root.to_str().unwrap()).expect("scan");
+        let relpaths: HashSet<String> = files.into_iter().map(|f| f.relpath).collect();
+        assert!(relpaths.contains("root.txt"));
+        assert!(relpaths.contains("a/child.txt"));
+    }
+
+    #[test]
+    fn parse_updated_at_valid_rfc3339() {
+        let result = parse_updated_at("2024-01-01T00:00:00Z");
+        assert_eq!(result, 1704067200000);
+    }
+
+    #[test]
+    fn parse_updated_at_invalid_falls_back_to_now() {
+        let before = now_ms();
+        let result = parse_updated_at("not-a-time");
+        let after = now_ms();
+        assert!(result >= before);
+        assert!(result <= after);
+    }
+
+    #[test]
+    fn to_local_map_indexes_by_relpath() {
+        let item = LocalFileInfo {
+            relpath: "a.txt".to_string(),
+            abs_path: PathBuf::from("/tmp/a.txt"),
+            size: 1,
+            mtime_ms: 1,
+            sha256: "x".to_string(),
+        };
+        let map = to_local_map(vec![item]);
+        assert!(map.contains_key("a.txt"));
+    }
+
+    #[test]
+    fn to_remote_map_skips_dirs_and_parses_metadata() {
+        let mut metadata = HashMap::new();
+        metadata.insert(META_SHA256.to_string(), "abc".to_string());
+        metadata.insert(META_MTIME.to_string(), "123".to_string());
+        metadata.insert(META_DELETED_AT.to_string(), "456".to_string());
+
+        let files = vec![
+            RemoteFile {
+                id: "dir".to_string(),
+                name: "dir".to_string(),
+                uri: "cloudreve://root/Work/dir".to_string(),
+                size: 0,
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+                metadata: HashMap::new(),
+                is_dir: true,
+            },
+            RemoteFile {
+                id: "file".to_string(),
+                name: "file".to_string(),
+                uri: "cloudreve://root/Work/a.txt".to_string(),
+                size: 10,
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+                metadata,
+                is_dir: false,
+            },
+        ];
+
+        let map = to_remote_map(files, "cloudreve://root/Work").expect("map");
+        let file = map.get("a.txt").expect("file");
+        assert_eq!(file.sha256, "abc");
+        assert_eq!(file.mtime_ms, 123);
+        assert_eq!(file.deleted_at_ms, Some(456));
+    }
+
+    #[test]
+    fn file_extension_and_stem() {
+        assert_eq!(file_extension("a/b.tar.gz"), Some("gz".to_string()));
+        assert_eq!(file_stem("a/b.tar.gz"), "b.tar");
+    }
+
+    #[test]
+    fn remove_local_file_ignores_missing() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("gone.txt");
+        let info = LocalFileInfo {
+            relpath: "gone.txt".to_string(),
+            abs_path: path.clone(),
+            size: 0,
+            mtime_ms: 0,
+            sha256: String::new(),
+        };
+        remove_local_file(&info).expect("remove");
+        assert!(!path.exists());
+    }
+}

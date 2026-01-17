@@ -77,3 +77,42 @@ impl LogStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::db::{init_db, list_logs};
+    use rusqlite::Connection;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn log_level_as_str() {
+        assert_eq!(LogLevel::Info.as_str(), "info");
+        assert_eq!(LogLevel::Warn.as_str(), "warn");
+        assert_eq!(LogLevel::Error.as_str(), "error");
+    }
+
+    #[test]
+    fn log_entry_to_row() {
+        let entry = LogEntry::new("task-1", LogLevel::Info, "upload", "file.txt");
+        let row = entry.to_row();
+        assert_eq!(row.task_id, "task-1");
+        assert_eq!(row.level, "info");
+        assert_eq!(row.event, "upload");
+        assert_eq!(row.detail, "file.txt");
+        assert_eq!(row.created_at_ms, entry.created_at_ms);
+    }
+
+    #[test]
+    fn log_store_append_inserts_row() {
+        let file = NamedTempFile::new().expect("temp db");
+        let mut conn = Connection::open(file.path()).expect("open db");
+        init_db(&conn).expect("init db");
+        let store = LogStore::new(file.path().to_path_buf());
+        let entry = LogEntry::new("task-1", LogLevel::Warn, "sync", "detail");
+        store.append(&mut conn, &entry).expect("append");
+        let logs = list_logs(&conn, Some("task-1"), Some("warn")).expect("logs");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].event, "sync");
+    }
+}

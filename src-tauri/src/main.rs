@@ -1,16 +1,24 @@
 mod core;
 
-use core::cloudreve::{get_captcha, password_sign_in, CloudreveClient};
-use core::config::ApiPaths;
+use core::cloudreve::{
+    finish_sign_in_with_2fa, get_captcha, password_sign_in, refresh_token, CloudreveClient,
+    SignInResult,
+};
+use core::config::{ApiPaths, AppSettings, config_dir, ensure_dir};
 use core::credentials::{load_tokens, store_tokens};
-use core::db::{create_task, init_db, list_conflicts, list_logs, list_tasks, now_ms, TaskRow};
+use core::db::{
+    create_task, delete_all_accounts, delete_conflict, init_db, list_accounts, list_conflicts, list_logs, list_tasks, now_ms,
+    upsert_account, AccountRow, TaskRow,
+};
 use core::sync::SyncEngine;
 use chrono::{Local, TimeZone};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -35,6 +43,8 @@ struct AppState {
     runners: Mutex<HashMap<String, RunnerHandle>>,
 }
 
+const TOKEN_REFRESH_INTERVAL_SECS: u64 = 20 * 60;
+
 #[derive(Serialize)]
 struct DashboardCard {
     label: String,
@@ -57,6 +67,14 @@ struct TaskItem {
 }
 
 #[derive(Serialize)]
+struct AccountItem {
+    account_key: String,
+    base_url: String,
+    email: String,
+    created_at_ms: i64,
+}
+
+#[derive(Serialize)]
 struct ActivityItem {
     timestamp: String,
     event: String,
@@ -67,12 +85,28 @@ struct ActivityItem {
 #[derive(Serialize)]
 struct ConflictItem {
     id: String,
+    task_id: String,
+    original_relpath: String,
+    conflict_relpath: String,
     name: String,
     task: String,
     path: String,
+    local_path: String,
+    local_dir: String,
     device: String,
     time: String,
     status: String,
+}
+
+#[derive(Serialize)]
+struct DiagnosticInfo {
+    app_version: String,
+    os: String,
+    arch: String,
+    db_path: String,
+    config_dir: String,
+    accounts: usize,
+    tasks: usize,
 }
 
 #[derive(Serialize)]
@@ -92,9 +126,19 @@ struct LoginRequest {
     ticket: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct TwoFaFinishRequest {
+    base_url: String,
+    email: String,
+    session_id: String,
+    opt: String,
+}
+
 #[derive(Serialize)]
-struct LoginResult {
-    account_key: String,
+#[serde(tag = "status", rename_all = "snake_case")]
+enum LoginCommandResult {
+    Success { account_key: String },
+    TwoFaRequired { session_id: String },
 }
 
 #[derive(Deserialize)]
@@ -127,13 +171,56 @@ struct TaskSettings {
 }
 
 #[tauri::command]
-fn login(_state: tauri::State<AppState>, payload: LoginRequest) -> Result<LoginResult, String> {
+fn login(state: tauri::State<AppState>, payload: LoginRequest) -> Result<LoginCommandResult, String> {
     let result = tauri::async_runtime::block_on(password_sign_in(
         &payload.base_url,
         &payload.email,
         &payload.password,
         payload.captcha.as_deref(),
         payload.ticket.as_deref(),
+    ))
+    .map_err(|err| err.to_string())?;
+
+    match result {
+        SignInResult::Success(result) => {
+            let account_key = format!("{}|{}", payload.base_url, payload.email);
+            store_tokens(
+                &account_key,
+                &result.token.access_token,
+                &result.token.refresh_token,
+            )
+            .map_err(|err| err.to_string())?;
+
+            let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+            init_db(&conn).map_err(|err| err.to_string())?;
+            upsert_account(
+                &conn,
+                &AccountRow {
+                    account_key: account_key.clone(),
+                    base_url: payload.base_url,
+                    email: payload.email,
+                    created_at_ms: now_ms(),
+                },
+            )
+            .map_err(|err| err.to_string())?;
+
+            Ok(LoginCommandResult::Success { account_key })
+        }
+        SignInResult::TwoFaRequired(session_id) => {
+            Ok(LoginCommandResult::TwoFaRequired { session_id })
+        }
+    }
+}
+
+#[tauri::command]
+fn finish_sign_in_with_2fa_command(
+    state: tauri::State<AppState>,
+    payload: TwoFaFinishRequest,
+) -> Result<LoginCommandResult, String> {
+    let result = tauri::async_runtime::block_on(finish_sign_in_with_2fa(
+        &payload.base_url,
+        &payload.opt,
+        &payload.session_id,
     ))
     .map_err(|err| err.to_string())?;
 
@@ -145,7 +232,20 @@ fn login(_state: tauri::State<AppState>, payload: LoginRequest) -> Result<LoginR
     )
     .map_err(|err| err.to_string())?;
 
-    Ok(LoginResult { account_key })
+    let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+    init_db(&conn).map_err(|err| err.to_string())?;
+    upsert_account(
+        &conn,
+        &AccountRow {
+            account_key: account_key.clone(),
+            base_url: payload.base_url,
+            email: payload.email,
+            created_at_ms: now_ms(),
+        },
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(LoginCommandResult::Success { account_key })
 }
 
 #[tauri::command]
@@ -198,26 +298,229 @@ fn list_tasks_command(state: tauri::State<AppState>) -> Result<Vec<TaskItem>, St
 }
 
 #[tauri::command]
+fn list_accounts_command(state: tauri::State<AppState>) -> Result<Vec<AccountItem>, String> {
+    let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+    init_db(&conn).map_err(|err| err.to_string())?;
+    let accounts = list_accounts(&conn).map_err(|err| err.to_string())?;
+    Ok(accounts
+        .into_iter()
+        .map(|item| AccountItem {
+            account_key: item.account_key,
+            base_url: item.base_url,
+            email: item.email,
+            created_at_ms: item.created_at_ms,
+        })
+        .collect())
+}
+#[tauri::command]
 fn list_conflicts_command(state: tauri::State<AppState>, task_id: Option<String>) -> Result<Vec<ConflictItem>, String> {
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
     let conflicts = list_conflicts(&conn, task_id.as_deref()).map_err(|err| err.to_string())?;
     let tasks = list_tasks(&conn).map_err(|err| err.to_string())?;
     let task_map = tasks
         .into_iter()
-        .map(|task| (task.task_id, parse_settings(&task.settings_json).name))
+        .map(|task| {
+            let settings = parse_settings(&task.settings_json);
+            (
+                task.task_id,
+                (settings.name, task.local_root),
+            )
+        })
         .collect::<HashMap<_, _>>();
     Ok(conflicts
         .into_iter()
-        .map(|item| ConflictItem {
-            id: format!("{}:{}", item.task_id, item.conflict_relpath),
-            name: file_name(&item.original_relpath),
-            task: task_map.get(&item.task_id).cloned().unwrap_or_else(|| item.task_id.clone()),
-            path: parent_path(&item.original_relpath),
-            device: "".to_string(),
-            time: format_time(item.created_at_ms),
-            status: "未处理".to_string(),
+        .map(|item| {
+            let (task_name, local_root) = task_map
+                .get(&item.task_id)
+                .cloned()
+                .unwrap_or_else(|| (item.task_id.clone(), String::new()));
+            let local_path = if local_root.is_empty() {
+                item.conflict_relpath.clone()
+            } else {
+                PathBuf::from(&local_root)
+                    .join(&item.conflict_relpath)
+                    .to_string_lossy()
+                    .to_string()
+            };
+            let local_dir = parent_path(&local_path);
+            ConflictItem {
+                id: format!("{}:{}", item.task_id, item.conflict_relpath),
+                task_id: item.task_id.clone(),
+                original_relpath: item.original_relpath.clone(),
+                conflict_relpath: item.conflict_relpath.clone(),
+                name: file_name(&item.original_relpath),
+                task: task_name,
+                path: parent_path(&item.original_relpath),
+                local_path,
+                local_dir,
+                device: "".to_string(),
+                time: format_time(item.created_at_ms),
+                status: "未处理".to_string(),
+            }
         })
         .collect())
+}
+
+#[tauri::command]
+fn get_settings_command() -> Result<AppSettings, String> {
+    AppSettings::load().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn save_settings_command(payload: AppSettings) -> Result<(), String> {
+    payload.save().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn clear_credentials_command(state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+    init_db(&conn).map_err(|err| err.to_string())?;
+    let accounts = list_accounts(&conn).map_err(|err| err.to_string())?;
+    for account in &accounts {
+        let _ = core::credentials::clear_tokens(&account.account_key);
+    }
+    delete_all_accounts(&conn).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn open_local_path(path: String) -> Result<(), String> {
+    let target = PathBuf::from(path);
+    if !target.exists() {
+        return Err("path not found".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&target)
+            .spawn()
+            .map_err(|err| err.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&target)
+            .spawn()
+            .map_err(|err| err.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&target)
+            .spawn()
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|err| err.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|err| err.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn export_logs_command(state: tauri::State<AppState>, task_id: Option<String>, level: Option<String>) -> Result<String, String> {
+    let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+    init_db(&conn).map_err(|err| err.to_string())?;
+    let logs = list_logs(&conn, task_id.as_deref(), level.as_deref()).map_err(|err| err.to_string())?;
+    let base_dir = config_dir().map_err(|err| err.to_string())?;
+    let export_dir = base_dir.join("exports");
+    ensure_dir(&export_dir).map_err(|err| err.to_string())?;
+    let filename = format!("logs-{}.jsonl", Local::now().format("%Y%m%d-%H%M%S"));
+    let path = export_dir.join(filename);
+    let mut file = std::fs::File::create(&path).map_err(|err| err.to_string())?;
+    for log in logs {
+        let line = serde_json::to_string(&log).map_err(|err| err.to_string())?;
+        file.write_all(line.as_bytes()).map_err(|err| err.to_string())?;
+        file.write_all(b"\n").map_err(|err| err.to_string())?;
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn get_diagnostics_command(state: tauri::State<AppState>) -> Result<DiagnosticInfo, String> {
+    let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+    init_db(&conn).map_err(|err| err.to_string())?;
+    let accounts = list_accounts(&conn).map_err(|err| err.to_string())?;
+    let tasks = list_tasks(&conn).map_err(|err| err.to_string())?;
+    let cfg_dir = config_dir().map_err(|err| err.to_string())?;
+    Ok(DiagnosticInfo {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        db_path: state.db_path.to_string_lossy().to_string(),
+        config_dir: cfg_dir.to_string_lossy().to_string(),
+        accounts: accounts.len(),
+        tasks: tasks.len(),
+    })
+}
+
+#[tauri::command]
+fn mark_conflict_resolved(state: tauri::State<AppState>, task_id: String, conflict_relpath: String) -> Result<(), String> {
+    let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+    delete_conflict(&conn, &task_id, &conflict_relpath).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn download_conflict_remote(state: tauri::State<AppState>, task_id: String, original_relpath: String) -> Result<(), String> {
+    let (task, settings) = load_task_settings(&state.db_path, &task_id).map_err(|err| err.to_string())?;
+    let tokens = load_tokens(&settings.account_key).map_err(|err| err.to_string())?;
+    let uri = build_remote_uri(&task.remote_root_uri, &original_relpath);
+    let client = CloudreveClient::new(task.base_url, Some(tokens.access_token), state.api_paths.clone());
+    let result = tauri::async_runtime::block_on(client.create_download_urls(vec![uri], true))
+        .map_err(|err| err.to_string())?;
+    let url = result
+        .urls
+        .first()
+        .map(|item| item.url.clone())
+        .ok_or_else(|| "download url missing".to_string())?;
+    open_external(url)
+}
+
+#[tauri::command]
+fn hash_local_file(path: String) -> Result<String, String> {
+    let mut file = std::fs::File::open(&path).map_err(|err| err.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 512];
+    loop {
+        let count = std::io::Read::read(&mut file, &mut buffer).map_err(|err| err.to_string())?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn build_remote_uri(root_uri: &str, relpath: &str) -> String {
+    let root = root_uri.trim_end_matches('/');
+    let encoded = relpath
+        .split('/')
+        .map(|part| urlencoding::encode(part).to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("{}/{}", root, encoded)
 }
 
 #[tauri::command]
@@ -556,7 +859,43 @@ fn db_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(path)
 }
 
+fn refresh_tokens_once(db_path: &PathBuf) -> Result<(), Box<dyn Error>> {
+    let conn = Connection::open(db_path)?;
+    init_db(&conn)?;
+    let accounts = list_accounts(&conn)?;
+    for account in accounts {
+        let tokens = match load_tokens(&account.account_key) {
+            Ok(tokens) => tokens,
+            Err(_) => continue,
+        };
+        if tokens.refresh_token.is_empty() {
+            continue;
+        }
+        let refreshed = tauri::async_runtime::block_on(refresh_token(
+            &account.base_url,
+            &tokens.refresh_token,
+        ));
+        let refreshed = match refreshed {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let _ = store_tokens(
+            &account.account_key,
+            &refreshed.access_token,
+            &refreshed.refresh_token,
+        );
+    }
+    Ok(())
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     let db_path = db_path().expect("db path");
     let conn = Connection::open(&db_path).expect("db open");
     init_db(&conn).expect("db init");
@@ -573,15 +912,33 @@ fn main() {
             let handle = app.handle();
             setup_tray(&handle)?;
             setup_window_events(&handle);
+            let state = app.state::<AppState>();
+            let db_path = state.db_path.clone();
+            thread::spawn(move || loop {
+                let _ = refresh_tokens_once(&db_path);
+                thread::sleep(Duration::from_secs(TOKEN_REFRESH_INTERVAL_SECS));
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             login,
+            finish_sign_in_with_2fa_command,
             get_captcha_command,
             test_connection,
             create_task_command,
             list_tasks_command,
+            list_accounts_command,
+            get_settings_command,
+            save_settings_command,
+            clear_credentials_command,
+            open_local_path,
+            open_external,
+            mark_conflict_resolved,
+            download_conflict_remote,
+            hash_local_file,
+            get_diagnostics_command,
+            export_logs_command,
             list_conflicts_command,
             list_logs_command,
             run_sync_command,

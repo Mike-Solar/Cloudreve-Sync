@@ -1,6 +1,6 @@
 use crate::core::config::ApiPaths;
 use crate::core::error::CloudreveError;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::error::Error;
@@ -10,6 +10,42 @@ pub struct ApiResponse<T> {
     pub data: T,
     pub code: u32,
     pub msg: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ApiEnvelope {
+    #[serde(default)]
+    pub data: Option<Value>,
+    pub code: u32,
+    #[serde(default)]
+    pub msg: String,
+}
+
+async fn parse_api_response<T: DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<ApiResponse<T>, Box<dyn Error>> {
+    let status = response.status();
+    let text = response.text().await?;
+    let envelope = serde_json::from_str::<ApiEnvelope>(&text).map_err(|err| {
+        let message = format!("响应解析失败: status={} err={} body={}", status, err, text);
+        std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+    })?;
+    if envelope.code != 0 {
+        return Err(Box::new(CloudreveError::from_u32(envelope.code)));
+    }
+    let data_value = envelope.data.ok_or_else(|| {
+        let message = format!("响应解析失败: status={} err=missing data body={}", status, text);
+        std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+    })?;
+    let data = serde_json::from_value::<T>(data_value).map_err(|err| {
+        let message = format!("响应解析失败: status={} err={} body={}", status, err, text);
+        std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+    })?;
+    Ok(ApiResponse {
+        data,
+        code: envelope.code,
+        msg: envelope.msg,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -113,16 +149,8 @@ impl CloudreveClient {
 
     pub async fn ping(&self) -> Result<(), Box<dyn Error>> {
         let url = format!("{}/site/ping", self.base_url);
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await?
-            .json::<ApiResponse<Value>>()
-            .await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let response = self.client.get(url).send().await?;
+        let response = parse_api_response::<Value>(response).await?;
         Ok(())
     }
 
@@ -136,15 +164,8 @@ impl CloudreveClient {
         if let Some(page) = page {
             url.push_str(&format!("&page={}", page));
         }
-        let response = self
-            .apply_auth(self.client.get(url))
-            .send()
-            .await?
-            .json::<ApiResponse<ListFilesData>>()
-            .await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let response = self.apply_auth(self.client.get(url)).send().await?;
+        let response = parse_api_response::<ListFilesData>(response).await?;
         Ok(response.data)
     }
 
@@ -176,15 +197,8 @@ impl CloudreveClient {
 
     pub async fn list_storage_policies(&self) -> Result<Vec<Value>, Box<dyn Error>> {
         let url = format!("{}/user/setting/policies", self.base_url);
-        let response = self
-            .apply_auth(self.client.get(url))
-            .send()
-            .await?
-            .json::<ApiResponse<Vec<Value>>>()
-            .await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let response = self.apply_auth(self.client.get(url)).send().await?;
+        let response = parse_api_response::<Vec<Value>>(response).await?;
         Ok(response.data)
     }
 
@@ -201,12 +215,8 @@ impl CloudreveClient {
                 "download": download
             }))
             .send()
-            .await?
-            .json::<ApiResponse<DownloadUrlResponse>>()
             .await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let response = parse_api_response::<DownloadUrlResponse>(response).await?;
         Ok(response.data)
     }
 
@@ -232,10 +242,8 @@ impl CloudreveClient {
             .apply_auth(self.client.put(url))
             .header(reqwest::header::CONTENT_LENGTH, content.len() as u64)
             .body(content.to_vec());
-        let response = request.send().await?.json::<ApiResponse<Value>>().await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let response = request.send().await?;
+        let _response = parse_api_response::<Value>(response).await?;
         Ok(())
     }
 
@@ -263,12 +271,8 @@ impl CloudreveClient {
             .apply_auth(self.client.put(url))
             .json(&payload)
             .send()
-            .await?
-            .json::<ApiResponse<UploadSession>>()
             .await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let response = parse_api_response::<UploadSession>(response).await?;
         Ok(response.data)
     }
 
@@ -287,12 +291,8 @@ impl CloudreveClient {
             .header(reqwest::header::CONTENT_LENGTH, chunk.len() as u64)
             .body(chunk.to_vec())
             .send()
-            .await?
-            .json::<ApiResponse<Value>>()
             .await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let _response = parse_api_response::<Value>(response).await?;
         Ok(())
     }
 
@@ -309,12 +309,8 @@ impl CloudreveClient {
                 "patches": patches
             }))
             .send()
-            .await?
-            .json::<ApiResponse<Value>>()
             .await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let _response = parse_api_response::<Value>(response).await?;
         Ok(())
     }
 
@@ -335,12 +331,8 @@ impl CloudreveClient {
                 "unlink": false
             }))
             .send()
-            .await?
-            .json::<ApiResponse<Value>>()
             .await?;
-        if response.code != 0 {
-            return Err(Box::new(CloudreveError::from_u32(response.code)));
-        }
+        let _response = parse_api_response::<Value>(response).await?;
         Ok(())
     }
 
@@ -373,13 +365,29 @@ pub struct MetadataPatch {
     pub remove: Option<bool>,
 }
 
+#[derive(Debug, Clone)]
+pub enum SignInResult {
+    Success(LoginResponse),
+    TwoFaRequired(String),
+}
+
+async fn parse_api_envelope(response: reqwest::Response) -> Result<ApiEnvelope, Box<dyn Error>> {
+    let status = response.status();
+    let text = response.text().await?;
+    let envelope = serde_json::from_str::<ApiEnvelope>(&text).map_err(|err| {
+        let message = format!("响应解析失败: status={} err={} body={}", status, err, text);
+        std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+    })?;
+    Ok(envelope)
+}
+
 pub async fn password_sign_in(
     base_url: &str,
     email: &str,
     password: &str,
     captcha: Option<&str>,
     ticket: Option<&str>,
-) -> Result<LoginResponse, Box<dyn Error>> {
+) -> Result<SignInResult, Box<dyn Error>> {
     let base_url = if base_url.ends_with("/api/v4") {
         base_url.to_string()
     } else if base_url.ends_with('/') {
@@ -402,12 +410,77 @@ pub async fn password_sign_in(
         .post(url)
         .json(&body)
         .send()
-        .await?
-        .json::<ApiResponse<LoginResponse>>()
         .await?;
-    if response.code != 0 {
-        return Err(Box::new(CloudreveError::from_u32(response.code)));
+    let response = parse_api_envelope(response).await?;
+    if response.code == 0 {
+        let data_value = response.data.ok_or_else(|| {
+            let message = "响应解析失败: err=missing data".to_string();
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+        })?;
+        let data = serde_json::from_value::<LoginResponse>(data_value).map_err(|err| {
+            let message = format!("响应解析失败: err={} msg={}", err, response.msg);
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+        })?;
+        return Ok(SignInResult::Success(data));
     }
+    if response.code == CloudreveError::NotFullySuccessful as u32 {
+        let data_value = response.data.ok_or_else(|| {
+            let message = "响应解析失败: err=missing data".to_string();
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+        })?;
+        let session_id = serde_json::from_value::<String>(data_value).map_err(|err| {
+            let message = format!("响应解析失败: err={} msg={}", err, response.msg);
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+        })?;
+        return Ok(SignInResult::TwoFaRequired(session_id));
+    }
+    Err(Box::new(CloudreveError::from_u32(response.code)))
+}
+
+pub async fn finish_sign_in_with_2fa(
+    base_url: &str,
+    opt: &str,
+    session_id: &str,
+) -> Result<LoginResponse, Box<dyn Error>> {
+    let base_url = if base_url.ends_with("/api/v4") {
+        base_url.to_string()
+    } else if base_url.ends_with('/') {
+        format!("{}api/v4", base_url.trim_end_matches('/'))
+    } else {
+        format!("{}/api/v4", base_url)
+    };
+    let url = format!("{}/session/token/2fa", base_url);
+    let response = reqwest::Client::new()
+        .post(url)
+        .json(&serde_json::json!({
+            "opt": opt,
+            "otp": opt,
+            "session_id": session_id
+        }))
+        .send()
+        .await?;
+    let response = parse_api_response::<LoginResponse>(response).await?;
+    Ok(response.data)
+}
+
+pub async fn refresh_token(
+    base_url: &str,
+    refresh_token: &str,
+) -> Result<TokenPair, Box<dyn Error>> {
+    let base_url = if base_url.ends_with("/api/v4") {
+        base_url.to_string()
+    } else if base_url.ends_with('/') {
+        format!("{}api/v4", base_url.trim_end_matches('/'))
+    } else {
+        format!("{}/api/v4", base_url)
+    };
+    let url = format!("{}/session/token/refresh", base_url);
+    let response = reqwest::Client::new()
+        .post(url)
+        .json(&serde_json::json!({ "refresh_token": refresh_token }))
+        .send()
+        .await?;
+    let response = parse_api_response::<TokenPair>(response).await?;
     Ok(response.data)
 }
 
@@ -426,14 +499,7 @@ pub async fn get_captcha(base_url: &str) -> Result<CaptchaData, Box<dyn Error>> 
         format!("{}/api/v4", base_url)
     };
     let url = format!("{}/site/captcha", base_url);
-    let response = reqwest::Client::new()
-        .get(url)
-        .send()
-        .await?
-        .json::<ApiResponse<CaptchaData>>()
-        .await?;
-    if response.code != 0 {
-        return Err(Box::new(CloudreveError::from_u32(response.code)));
-    }
+    let response = reqwest::Client::new().get(url).send().await?;
+    let response = parse_api_response::<CaptchaData>(response).await?;
     Ok(response.data)
 }

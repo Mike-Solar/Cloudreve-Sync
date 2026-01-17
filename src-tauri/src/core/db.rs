@@ -1,4 +1,5 @@
 use chrono::Utc;
+use serde::Serialize;
 use rusqlite::{params, Connection, Result};
 
 #[derive(Debug, Clone)]
@@ -10,6 +11,14 @@ pub struct TaskRow {
     pub device_id: String,
     pub mode: String,
     pub settings_json: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountRow {
+    pub account_key: String,
+    pub base_url: String,
+    pub email: String,
     pub created_at_ms: i64,
 }
 
@@ -45,7 +54,7 @@ pub struct ConflictRow {
     pub reason: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LogRow {
     pub task_id: String,
     pub level: String,
@@ -65,6 +74,13 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             device_id TEXT NOT NULL,
             mode TEXT NOT NULL,
             settings_json TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS accounts (
+            account_key TEXT PRIMARY KEY,
+            base_url TEXT NOT NULL,
+            email TEXT NOT NULL,
             created_at_ms INTEGER NOT NULL
         );
 
@@ -109,6 +125,43 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
+    Ok(())
+}
+
+pub fn upsert_account(conn: &Connection, account: &AccountRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO accounts (account_key, base_url, email, created_at_ms) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(account_key) DO UPDATE SET base_url=excluded.base_url, email=excluded.email",
+        params![
+            account.account_key,
+            account.base_url,
+            account.email,
+            account.created_at_ms
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_accounts(conn: &Connection) -> Result<Vec<AccountRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT account_key, base_url, email, created_at_ms FROM accounts ORDER BY created_at_ms DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(AccountRow {
+            account_key: row.get(0)?,
+            base_url: row.get(1)?,
+            email: row.get(2)?,
+            created_at_ms: row.get(3)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn delete_all_accounts(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM accounts", [])?;
     Ok(())
 }
 
@@ -240,6 +293,14 @@ pub fn insert_conflict(conn: &Connection, conflict: &ConflictRow) -> Result<()> 
             conflict.created_at_ms,
             conflict.reason
         ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_conflict(conn: &Connection, task_id: &str, conflict_relpath: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM conflicts WHERE task_id = ?1 AND conflict_relpath = ?2",
+        params![task_id, conflict_relpath],
     )?;
     Ok(())
 }

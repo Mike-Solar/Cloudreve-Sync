@@ -232,3 +232,26 @@ impl CloudreveError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_u32_maps_known_values() {
+        assert!(matches!(CloudreveError::from_u32(404), CloudreveError::ResourceNotFound));
+        assert!(matches!(CloudreveError::from_u32(40001), CloudreveError::ParameterError));
+    }
+
+    #[test]
+    fn from_u32_defaults_to_unknown() {
+        assert!(matches!(CloudreveError::from_u32(999999), CloudreveError::Unknown));
+    }
+
+    #[test]
+    fn display_formats_code_and_name() {
+        let err = CloudreveError::ResourceNotFound;
+        let text = err.to_string();
+        assert_eq!(text, "404: ResourceNotFound");
+    }
+}

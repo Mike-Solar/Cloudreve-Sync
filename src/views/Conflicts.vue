@@ -24,7 +24,7 @@
             <div class="panel-title">冲突详情</div>
             <div class="panel-subtitle">原文件与冲突副本双保留</div>
           </div>
-          <el-button type="primary">标记已处理</el-button>
+          <el-button type="primary" @click="markResolved">标记已处理</el-button>
         </div>
         <div class="conflict-summary">
           <div>
@@ -51,9 +51,9 @@
           </el-card>
         </div>
         <div class="conflict-actions">
-          <el-button>下载云端版本</el-button>
-          <el-button>打开文件目录</el-button>
-          <el-button type="primary" plain>复制 sha256</el-button>
+          <el-button @click="downloadRemote">下载云端版本</el-button>
+          <el-button @click="openFolder">打开文件目录</el-button>
+          <el-button type="primary" plain @click="copySha256">复制 sha256</el-button>
         </div>
       </el-card>
     </div>
@@ -62,8 +62,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { ElMessage } from "element-plus";
 import type { ConflictItem } from "../services/types";
-import { listConflicts } from "../services/api";
+import { downloadConflictRemote, hashLocalFile, listConflicts, markConflictResolved, openLocalPath } from "../services/api";
 
 const conflicts = ref<ConflictItem[]>([]);
 const selected = ref<ConflictItem | null>(null);
@@ -86,5 +87,30 @@ const filtered = computed(() => {
 
 const selectConflict = (row: ConflictItem) => {
   selected.value = row;
+};
+
+const markResolved = async () => {
+  if (!selected.value) return;
+  await markConflictResolved(selected.value.task_id, selected.value.conflict_relpath);
+  await refresh();
+  ElMessage.success("已标记为处理");
+};
+
+const downloadRemote = async () => {
+  if (!selected.value) return;
+  await downloadConflictRemote(selected.value.task_id, selected.value.original_relpath);
+  ElMessage.success("已打开下载链接");
+};
+
+const openFolder = async () => {
+  if (!selected.value) return;
+  await openLocalPath(selected.value.local_dir);
+};
+
+const copySha256 = async () => {
+  if (!selected.value) return;
+  const hash = await hashLocalFile(selected.value.local_path);
+  await navigator.clipboard.writeText(hash);
+  ElMessage.success("已复制 sha256");
 };
 </script>
