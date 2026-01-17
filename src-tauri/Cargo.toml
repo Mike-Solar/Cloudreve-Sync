@@ -3,6 +3,8 @@ name = "cloudreve-sync-app"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.tauri]
+
 [build-dependencies]
 tauri-build = { version = "2.5.3", features = [] }
 

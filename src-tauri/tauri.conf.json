@@ -9,6 +9,9 @@
   "productName": "Cloudreve Sync",
   "version": "0.1.0",
   "identifier": "cn.mikesolar.cloudreve-sync",
+  "bundle": {
+    "icon": ["icons/icon.png", "icons/icon.ico"]
+  },
   "app": {
     "windows": [
       {
