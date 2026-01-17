@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
 use crate::error::CloudreveError::Unknown;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[repr(u32)]
 pub enum CloudreveError{
     Ok = 0,
@@ -115,7 +115,7 @@ pub enum CloudreveError{
 
 impl Display for CloudreveError{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result{
-        write!(f, "{}: {}", self.clone() as u32, self)
+        write!(f, "{}: {:?}", *self as u32, self)
     }
 }
 impl Error for CloudreveError{}

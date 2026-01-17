@@ -1,0 +1,136 @@
+# Cloudreve API Docs
+
+## API Docs
+- Site [Ping](https://cloudrevev4.apifox.cn/ping-289465470e0.md): Get the version of the instance.
+- Site [Get CAPTCHA](https://cloudrevev4.apifox.cn/get-captcha-289470260e0.md): Request a CAPTCHA image and a ticket.
+- Site [Get site settings](https://cloudrevev4.apifox.cn/get-site-settings-289489676e0.md): Get global site settings paritioned by sections. Only settings in your requested section will be included in your response.
+- Site [Report abuse](https://cloudrevev4.apifox.cn/report-abuse-334845667e0.md): Report abuse on share links or users.
+- Session > Token [Password sign-in](https://cloudrevev4.apifox.cn/password-sign-in-289490586e0.md): 
+- Session > Token [Finish sign-in with 2FA](https://cloudrevev4.apifox.cn/finish-sign-in-with-2fa-289502780e0.md): After [Password Login](apifox://link/endpoint/289490586), if 2FA is required, this API is used to finish 2FA challenge and obtain a pair of token.
+- Session > Token [Refresh Token](https://cloudrevev4.apifox.cn/refresh-token-289504601e0.md): Refresh access token with a valid refresh token.
+- Session > Token [Sign out](https://cloudrevev4.apifox.cn/sign-out-300210073e0.md): Sign out current session and revoke the refresh token. All refresh tokens issued from the root token will be revoked. For SSO sign in sessions, this method also give the redirect URL from SSO side to sign out its session.
+- Session > OpenID [Prepare OpenID sign-in](https://cloudrevev4.apifox.cn/prepare-openid-sign-in-289505034e0.md): Preapre a social connector sign in, can be used to sign in Cloudreve account, or link existing account with a social connector account.
+- Session > OpenID [Finish OpenID sign-in](https://cloudrevev4.apifox.cn/finish-openid-sign-in-289511003e0.md): After user sign in via the URL obtained from [Prepare OpenID Sign-in](apifox://link/endpoint/289505034), request this to notify Cloudreve the result.
+- Session > OpenID [Unlink OpenID](https://cloudrevev4.apifox.cn/unlink-openid-289512330e0.md): Unlink an OpenID account from a Cloudreve account.
+- Session > Passkey [Prepare Passkey sign-in](https://cloudrevev4.apifox.cn/prepare-passkey-sign-in-289514622e0.md): Prepare a Passkey login session.
+- Session > Passkey [Finish Passkey sign-in](https://cloudrevev4.apifox.cn/finish-passkey-sign-in-289514893e0.md): 
+- Session [Prepare login](https://cloudrevev4.apifox.cn/prepare-login-289512825e0.md): Query if a given is existed, and all possible login method for it. This method is not required to perform a sign in, it just provide more context for frontent UI.
+- User > Passkey [Prepare passkey registration](https://cloudrevev4.apifox.cn/prepare-passkey-registration-308300603e0.md): Prepare to register a new passkey.
+- User > Passkey [Finish passkey registration](https://cloudrevev4.apifox.cn/finish-passkey-registration-308306602e0.md): 
+- User > Passkey [Delete passkey](https://cloudrevev4.apifox.cn/delete-passkey-308310960e0.md): Delete a registered passkey by ID.
+- User > Setting [List available storage policies](https://cloudrevev4.apifox.cn/list-available-storage-policies-308312707e0.md): List available storage policies for authenticated user.
+- User > Setting [List available nodes](https://cloudrevev4.apifox.cn/list-available-nodes-308315715e0.md): List available nodes assigned to authenticated user.
+- User > Setting [Get preferences](https://cloudrevev4.apifox.cn/get-preferences-308319497e0.md): 
+- User > Setting [Prepare enabling 2FA](https://cloudrevev4.apifox.cn/prepare-enabling-2fa-308379967e0.md): Before enabling 2FA, use this method to get a TOTP secret for generating QR Code.
+- User > Setting [Update preference setting](https://cloudrevev4.apifox.cn/update-preference-setting-308365129e0.md): Only non-null fields in request body will be updated.
+- User > Setting [Update profile pricture](https://cloudrevev4.apifox.cn/update-profile-pricture-308364709e0.md): Behaviour of this method depends on the request body:
+- User [Sign up](https://cloudrevev4.apifox.cn/sign-up-289517607e0.md): Create a new account from given email and password. 
+- User [Send reset password email](https://cloudrevev4.apifox.cn/send-reset-password-email-289518969e0.md): Send a email for an existing account to reset the password.
+- User [Reset password via temp link](https://cloudrevev4.apifox.cn/reset-password-via-temp-link-289518847e0.md): Reset account password using the `secret` included in the temp URl from the Email sent by [Send reset password email](apifox://link/endpoint/289518969).
+- User [Get profile picture](https://cloudrevev4.apifox.cn/get-profile-picture-289548561e0.md): Get given user's profile pciture, can be used as `src` for `img` tag directly, since it outputs the raw picture instead of standard Cloudreve's JSON response structure.
+- User [Get user](https://cloudrevev4.apifox.cn/get-user-289548981e0.md): Get user by ID. Authorization is optional, but `email` field will be redacted for anonymous request.
+- User [List user's share links](https://cloudrevev4.apifox.cn/list-users-share-links-289873723e0.md): List public share links created by the given user.
+- User [Get storage capacity](https://cloudrevev4.apifox.cn/get-storage-capacity-307902845e0.md): Get storage capacity summary for authenticated user.
+- User [Search user](https://cloudrevev4.apifox.cn/search-user-307905893e0.md): Search other users by display name of email.
+- User [List credit changes](https://cloudrevev4.apifox.cn/list-credit-changes-308382673e0.md): 
+- User [List payments](https://cloudrevev4.apifox.cn/list-payments-308383051e0.md): 
+- Callback [Complete OBS upload](https://cloudrevev4.apifox.cn/complete-obs-upload-295177687e0.md): Notify Cloudreve that a file is uploaded into Huawei OBS.
+- Callback [Complete OneDrive upload](https://cloudrevev4.apifox.cn/complete-onedrive-upload-295173813e0.md): Notify Cloudreve that a file is uploaded into OneDrive.
+- Callback [Complete COS upload](https://cloudrevev4.apifox.cn/complete-cos-upload-295177009e0.md): Notify Cloudreve that a file is uploaded into Tencent COS.
+- Callback [Complete S3 upload](https://cloudrevev4.apifox.cn/complete-s3-upload-295177181e0.md): Notify Cloudreve that a file is uploaded into S3.
+- Workflow > Remote Download [Create remote download](https://cloudrevev4.apifox.cn/create-remote-download-298183492e0.md): Create a remote download task.
+- Workflow > Remote Download [Select files to download](https://cloudrevev4.apifox.cn/select-files-to-download-298203346e0.md): Select/Unselect specific files in a bittorrent download task. This method only works for ongoing remote download tasks. For files not included in the request, their download behaviour is unchanged.
+- Workflow > Remote Download [Cancel task](https://cloudrevev4.apifox.cn/cancel-task-298207383e0.md): Cancel given remote download task. This method only applies to ongoing remote downlaod tasks.
+- Workflow [List tasks](https://cloudrevev4.apifox.cn/list-tasks-295188637e0.md): List all background tasks triggered by current authenticated user.
+- Workflow [Get task progress](https://cloudrevev4.apifox.cn/get-task-progress-295218550e0.md): Get realtime progress of the given task. Note that not all phases and all task types support getting progress. Empty response will be returned if there's no available progress info.
+- Workflow [Create archive](https://cloudrevev4.apifox.cn/create-archive-298111102e0.md): Create a tasks to create a new archive file from existing files.
+- Workflow [Extract archive](https://cloudrevev4.apifox.cn/extract-archive-298113451e0.md): Create a task to extract all files in a given archive file.
+- Workflow [Relocate storage policy](https://cloudrevev4.apifox.cn/relocate-storage-policy-298116563e0.md): Create a task to relocate storage policy for given files.
+- Workflow [Import external files](https://cloudrevev4.apifox.cn/import-external-files-298117803e0.md): Create a task to import external physical files to given path of a given user. **This method is restricted to users with admin permission only.**
+- File > Permission [Set permission](https://cloudrevev4.apifox.cn/set-permission-306544347e0.md): Set file permissions. Only owner of the file or administrators can perform this action.
+- File > Permission [Delete permission setting](https://cloudrevev4.apifox.cn/delete-permission-setting-306554896e0.md): Clear existing permission setting of target files, whose permission settings will be inherited from parent after this action. Only owner of the file or administrators can perform this action.
+- File > Upload [Create upload session](https://cloudrevev4.apifox.cn/create-upload-session-306671611e0.md): Create a upload session, which is required before uploading files. After upload session created, client should start uploading using the information included in the upload session. The implementation of upload differs from different storage policy type, you can find Cloudreve's implentation in [uploader](https://github.com/cloudreve/frontend/tree/master/src/component/Uploader/core/uploader).
+- File > Upload [Upload file chunk](https://cloudrevev4.apifox.cn/upload-file-chunk-306698012e0.md): Upload one chunk to Cloudreve. This method only applies to local storage policy, or storage policies with upload relay enabled.
+- File > Upload [Delete upload session](https://cloudrevev4.apifox.cn/delete-upload-session-306756902e0.md): Delete an upload session. Client should send this request if:
+- File > Pin [Pin to sidebar](https://cloudrevev4.apifox.cn/pin-to-sidebar-306763270e0.md): Pin a [URI](https://docs.cloudreve.org/api/file-uri) to user's sidebar.
+- File > Pin [Delete a pin](https://cloudrevev4.apifox.cn/delete-a-pin-306763333e0.md): Remove a pinned URI from user's sidebar.
+- File > Version [Set file version](https://cloudrevev4.apifox.cn/set-file-version-306782378e0.md): Set the current version of the file.
+- File > Version [Delete file version](https://cloudrevev4.apifox.cn/delete-file-version-306786278e0.md): Delete a version from a file's version history.
+- File > Direct Link [Create direct links](https://cloudrevev4.apifox.cn/create-direct-links-306837572e0.md): Create a direct link that can be used to access the file's content directly. Only file owners or administrators can create direct links.
+- File > Direct Link [Delete direct link](https://cloudrevev4.apifox.cn/delete-direct-link-314622469e0.md): Only file owner can delete direct links.
+- File [List files](https://cloudrevev4.apifox.cn/list-files-300233178e0.md): List files under given [URI](https://docs.cloudreve.org/api/file-uri), can also be used to search files if the URI contains search conditions.
+- File [List file activities](https://cloudrevev4.apifox.cn/list-file-activities-300250878e0.md): 
+- File [Get file info](https://cloudrevev4.apifox.cn/get-file-info-306769225e0.md): Get info of a given file by [URI](https://docs.cloudreve.org/api/file-uri) of file ID. Additional info is available if requested.
+- File [Get thumbnail URL](https://cloudrevev4.apifox.cn/get-thumbnail-url-306622263e0.md): Get the thumbnail URL of the given file.
+- File [Get archive file list](https://cloudrevev4.apifox.cn/get-archive-file-list-344346494e0.md): Get the content of archive files. Only supports `7z` or `zip` file.
+- File [Update file content](https://cloudrevev4.apifox.cn/update-file-content-306591838e0.md): Update the content of given file, if it does not exit, a new file will be created with given content.
+- File [Create viewer session](https://cloudrevev4.apifox.cn/create-viewer-session-306794559e0.md): Create a temporary WOPI session for 3rd party file apps or WOPI clients to download or edit files.
+- File [Create file](https://cloudrevev4.apifox.cn/create-file-300253321e0.md): Create a new file with given URI and props. If ancestor folders does not existed for given `uri`, they will be created automatically.
+- File [Rename file](https://cloudrevev4.apifox.cn/rename-file-300254639e0.md): 
+- File [Move or copy files](https://cloudrevev4.apifox.cn/move-or-copy-files-306530101e0.md): Move or copy files to given destination.
+- File [Create download URL](https://cloudrevev4.apifox.cn/create-download-url-306560314e0.md): Create a temporary anonymous URLs to download file content.
+- File [Restore from trash bin](https://cloudrevev4.apifox.cn/restore-from-trash-bin-306640902e0.md): Restore deleted files in trash bin to its original location.
+- File [Delete file](https://cloudrevev4.apifox.cn/delete-file-306637209e0.md): 
+- File [Force unlock](https://cloudrevev4.apifox.cn/force-unlock-306639058e0.md): If a file is locked by other user/application, file mutation might fail with errors like below:
+- File [Patch metadata](https://cloudrevev4.apifox.cn/patch-metadata-306643896e0.md): Modify [metadata](https://docs.cloudreve.org/api/metadata) of the given file.
+- File [Mount storage policy](https://cloudrevev4.apifox.cn/mount-storage-policy-300251520e0.md): This method mounts a folder to a given storage policy. All new files in this folder will prefer to use the mounted storage policy. This setting can be inherited by descendant folders if they're never mounted.
+- File [Update view setting](https://cloudrevev4.apifox.cn/update-view-setting-306842109e0.md): Update view settings for given folder. Only owner of the folder can update view settings.
+- Share [Create share link](https://cloudrevev4.apifox.cn/create-share-link-306853462e0.md): Create a share link to given file. Only file owner or administrator can create share links.
+- Share [Edit share link](https://cloudrevev4.apifox.cn/edit-share-link-306856561e0.md): Create a share link to given file. Only file owner or administrator can create share links.
+- Share [Get share link info](https://cloudrevev4.apifox.cn/get-share-link-info-306869986e0.md): Get share link info from ID.
+- Share [List my share links](https://cloudrevev4.apifox.cn/list-my-share-links-307857044e0.md): 
+- Share [Delete share link](https://cloudrevev4.apifox.cn/delete-share-link-307859874e0.md): Only the ower of the share link of administrators can delete it.
+- VAS > Payment [Create a payment](https://cloudrevev4.apifox.cn/create-a-payment-307864413e0.md): Create a payment for given product.
+- VAS > Payment [Get payment status](https://cloudrevev4.apifox.cn/get-payment-status-307895484e0.md): 
+- VAS > GiftCode [Check gift code](https://cloudrevev4.apifox.cn/check-gift-code-307898851e0.md): Get details of given gift code, but it does not process redemption.
+- VAS > GiftCode [Redeem gift code](https://cloudrevev4.apifox.cn/redeem-gift-code-307899774e0.md): 
+- Group [List groups](https://cloudrevev4.apifox.cn/list-groups-308383497e0.md): List all user groups.
+- WebDAV [List accounts](https://cloudrevev4.apifox.cn/list-accounts-308386165e0.md): List all WebDAV accounts under authenticated user.
+- WebDAV [Create account](https://cloudrevev4.apifox.cn/create-account-308388845e0.md): Create a new WebDAV account.
+- WebDAV [Update account](https://cloudrevev4.apifox.cn/update-account-308389580e0.md): 
+- WebDAV [Delete account](https://cloudrevev4.apifox.cn/delete-account-308390000e0.md): 
+
+## Schemas
+- [Response](https://cloudrevev4.apifox.cn/response-163769517d0.md): 
+- [SiteConfig](https://cloudrevev4.apifox.cn/siteconfig-163771160d0.md): 
+- [User](https://cloudrevev4.apifox.cn/user-163771507d0.md): 
+- [Group](https://cloudrevev4.apifox.cn/group-163771787d0.md): 
+- [FileViewer](https://cloudrevev4.apifox.cn/fileviewer-163777762d0.md): 
+- [PaymentProvider](https://cloudrevev4.apifox.cn/paymentprovider-163778132d0.md): 
+- [PaymentSetting](https://cloudrevev4.apifox.cn/paymentsetting-163778277d0.md): 
+- [StorageProduct](https://cloudrevev4.apifox.cn/storageproduct-163778411d0.md): 
+- [GroupSKU](https://cloudrevev4.apifox.cn/groupsku-163778983d0.md): 
+- [CaptchaFields](https://cloudrevev4.apifox.cn/captchafields-163780045d0.md): 
+- [Token](https://cloudrevev4.apifox.cn/token-163781380d0.md): 
+- [LoginResponse](https://cloudrevev4.apifox.cn/loginresponse-163781886d0.md): 
+- [PermissionSetting](https://cloudrevev4.apifox.cn/permissionsetting-164028472d0.md): 
+- [Share](https://cloudrevev4.apifox.cn/share-164060027d0.md): 
+- [PaginationResults](https://cloudrevev4.apifox.cn/paginationresults-164060880d0.md): 
+- [ListShareResponse](https://cloudrevev4.apifox.cn/listshareresponse-164061725d0.md): 
+- [TaskListResponse](https://cloudrevev4.apifox.cn/tasklistresponse-167747546d0.md): 
+- [Node](https://cloudrevev4.apifox.cn/node-167749404d0.md): 
+- [TaskResponse](https://cloudrevev4.apifox.cn/taskresponse-167753596d0.md): 
+- [Progress](https://cloudrevev4.apifox.cn/progress-167763884d0.md): 
+- [ArchiveWorkflowService](https://cloudrevev4.apifox.cn/archiveworkflowservice-169468638d0.md): 
+- [StoragePolicy](https://cloudrevev4.apifox.cn/storagepolicy-170754188d0.md): 
+- [Entity](https://cloudrevev4.apifox.cn/entity-170756144d0.md): 
+- [ExtendedInfo](https://cloudrevev4.apifox.cn/extendedinfo-170757286d0.md): 
+- [FolderSummary](https://cloudrevev4.apifox.cn/foldersummary-170757619d0.md): 
+- [FileResponse](https://cloudrevev4.apifox.cn/fileresponse-170759284d0.md): 
+- [NavigatorProps](https://cloudrevev4.apifox.cn/navigatorprops-170765481d0.md): 
+- [ListResponse](https://cloudrevev4.apifox.cn/listresponse-170769476d0.md): 
+- [LogEntry](https://cloudrevev4.apifox.cn/logentry-170778460d0.md): 
+- [Activity](https://cloudrevev4.apifox.cn/activity-170779161d0.md): 
+- [FileActivitiesResponse](https://cloudrevev4.apifox.cn/fileactivitiesresponse-170781519d0.md): 
+- [ExplorerView](https://cloudrevev4.apifox.cn/explorerview-174729066d0.md): 
+- [ListViewColumn](https://cloudrevev4.apifox.cn/listviewcolumn-174730654d0.md): 
+- [PinFileService](https://cloudrevev4.apifox.cn/pinfileservice-174870255d0.md): 
+- [ShareCreateService](https://cloudrevev4.apifox.cn/sharecreateservice-174927288d0.md): 
+- [Payment](https://cloudrevev4.apifox.cn/payment-175538967d0.md): 
+- [Passkey](https://cloudrevev4.apifox.cn/passkey-175785018d0.md): 
+- [DavAccount](https://cloudrevev4.apifox.cn/davaccount-175830557d0.md): 
+- [CreateDavAccountService](https://cloudrevev4.apifox.cn/createdavaccountservice-175832323d0.md): 
+- [CustomProps](https://cloudrevev4.apifox.cn/customprops-184464294d0.md): 
+- [CustomNavItem](https://cloudrevev4.apifox.cn/customnavitem-184470339d0.md): 
+- [CustomHTML](https://cloudrevev4.apifox.cn/customhtml-184470579d0.md): 
+- [ArchivedFile](https://cloudrevev4.apifox.cn/archivedfile-198129178d0.md): 

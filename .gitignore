@@ -6,3 +6,7 @@ target/
 
 # Cargo.lock
 Cargo.lock
+
+.codex
+AGENTS.md
+verification.md
