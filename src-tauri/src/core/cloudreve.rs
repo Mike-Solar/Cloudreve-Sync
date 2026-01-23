@@ -96,6 +96,40 @@ pub struct TokenPair {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionSetting {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_explicit: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_explicit: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anonymous: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub everyone: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareCreateService {
+    pub permissions: PermissionSetting,
+    pub uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_private: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share_view: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expire: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_readme: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub token: TokenPair,
 }
@@ -367,6 +401,41 @@ impl CloudreveClient {
             .await?;
         let _response = parse_api_response::<Value>(response).await?;
         Ok(())
+    }
+
+    pub async fn create_share_link(
+        &self,
+        uri: &str,
+        password: Option<String>,
+        expire_seconds: Option<u64>,
+        share_view: Option<bool>,
+    ) -> Result<String, Box<dyn Error>> {
+        let url = format!("{}{}", self.base_url, self.api_paths.create_share_link);
+        let permissions = PermissionSetting {
+            user_explicit: None,
+            group_explicit: None,
+            same_group: None,
+            other: None,
+            anonymous: Some("BQ==".to_string()),
+            everyone: Some("AQ==".to_string()),
+        };
+        let payload = ShareCreateService {
+            permissions,
+            uri: uri.to_string(),
+            is_private: password.as_ref().map(|value| !value.is_empty()),
+            share_view,
+            expire: expire_seconds,
+            price: None,
+            password: password.filter(|value| !value.is_empty()),
+            show_readme: None,
+        };
+        let response = self
+            .apply_auth(self.client.put(url))
+            .json(&payload)
+            .send()
+            .await?;
+        let response = parse_api_response::<String>(response).await?;
+        Ok(response.data)
     }
 
     pub fn build_file_uri(remote_path: &str) -> String {

@@ -1,0 +1,17 @@
+[Desktop Entry]
+Name=Cloudreve Sync
+GenericName=Cloudreve 同步客户端
+Comment=Cloudreve 双向同步助手
+Exec=cloudreve-sync
+StartupWMClass=Cloudreve Sync
+Icon=cloudreve-sync
+Terminal=false
+Type=Application
+Categories=Network;Office;
+MimeType=x-scheme-handler/cloudreve;
+Actions=ShareLink;
+
+[Desktop Action ShareLink]
+Name=创建分享链接
+Exec=cloudreve-sync --share %F
+Icon=cloudreve-sync

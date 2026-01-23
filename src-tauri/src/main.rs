@@ -15,9 +15,11 @@ use chrono::{Local, TimeZone};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tauri::Emitter;
 use std::collections::HashMap;
 use std::error::Error;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +33,9 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use uuid::Uuid;
+
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::PermissionsExt;
 
 #[derive(Clone)]
 struct RunnerHandle {
@@ -183,11 +188,23 @@ struct ListRemoteEntriesRequest {
     uri: String,
 }
 
+#[derive(Deserialize)]
+struct CreateShareLinkRequest {
+    local_path: String,
+    password: Option<String>,
+    expire_seconds: Option<u64>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct TaskSettings {
     name: String,
     account_key: String,
     sync_interval_secs: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct ShareRequestPayload {
+    path: String,
 }
 
 #[tauri::command]
@@ -346,6 +363,44 @@ fn list_remote_entries_command(
     );
     tauri::async_runtime::block_on(client.list_directory_entries(&payload.uri))
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn create_share_link_command(
+    state: tauri::State<AppState>,
+    payload: CreateShareLinkRequest,
+) -> Result<String, String> {
+    let local_path = PathBuf::from(&payload.local_path);
+    let metadata = local_path.metadata().map_err(|err| err.to_string())?;
+    let is_dir = metadata.is_dir();
+    let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
+    init_db(&conn).map_err(|err| err.to_string())?;
+    let tasks = list_tasks(&conn).map_err(|err| err.to_string())?;
+    let task = find_task_for_local_path(&tasks, &local_path)
+        .ok_or_else(|| "未找到匹配的同步任务".to_string())?;
+    let settings = parse_settings(&task.settings_json);
+    let tokens = load_tokens(&settings.account_key).map_err(|err| err.to_string())?;
+    let relpath = relpath_from_local(&task.local_root, &local_path)?;
+    let uri = if relpath.is_empty() {
+        task.remote_root_uri.clone()
+    } else {
+        build_remote_uri(&task.remote_root_uri, &relpath)
+    };
+    let password = payload
+        .password
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let expire_seconds = payload.expire_seconds.filter(|value| *value > 0);
+    let client = CloudreveClient::new(task.base_url.clone(), Some(tokens.access_token), state.api_paths.clone());
+    let link = tauri::async_runtime::block_on(client.create_share_link(
+        &uri,
+        password,
+        expire_seconds,
+        Some(is_dir),
+    ))
+    .map_err(|err| err.to_string())?;
+    log_info(&state.db_path, &task.task_id, "share", &format!("{} -> {}", payload.local_path, link));
+    Ok(link)
 }
 #[tauri::command]
 fn list_conflicts_command(state: tauri::State<AppState>, task_id: Option<String>) -> Result<Vec<ConflictItem>, String> {
@@ -558,6 +613,52 @@ fn build_remote_uri(root_uri: &str, relpath: &str) -> String {
     format!("{}/{}", root, encoded)
 }
 
+fn normalize_path_for_match(path: &Path) -> String {
+    let mut normalized = path.to_string_lossy().replace('\\', "/");
+    while normalized.ends_with('/') {
+        normalized.pop();
+    }
+    if cfg!(target_os = "windows") {
+        normalized = normalized.to_lowercase();
+    }
+    normalized
+}
+
+fn find_task_for_local_path(tasks: &[TaskRow], local_path: &Path) -> Option<TaskRow> {
+    let target = normalize_path_for_match(local_path);
+    let mut best: Option<(usize, TaskRow)> = None;
+    for task in tasks {
+        if task.local_root.trim().is_empty() {
+            continue;
+        }
+        let root = normalize_path_for_match(Path::new(&task.local_root));
+        if root.is_empty() {
+            continue;
+        }
+        let is_match = target == root || target.starts_with(&format!("{}/", root));
+        if !is_match {
+            continue;
+        }
+        let score = root.len();
+        if best.as_ref().map(|(len, _)| score > *len).unwrap_or(true) {
+            best = Some((score, task.clone()));
+        }
+    }
+    best.map(|(_, task)| task)
+}
+
+fn relpath_from_local(local_root: &str, local_path: &Path) -> Result<String, String> {
+    let root = Path::new(local_root);
+    let rel = local_path.strip_prefix(root).map_err(|_| "路径不在同步目录下".to_string())?;
+    let mut parts = Vec::new();
+    for component in rel.components() {
+        if let std::path::Component::Normal(value) = component {
+            parts.push(value.to_string_lossy().to_string());
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 #[tauri::command]
 fn list_logs_command(state: tauri::State<AppState>, query: LogsQuery) -> Result<Vec<ActivityItem>, String> {
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
@@ -752,6 +853,21 @@ fn log_error(db_path: &PathBuf, task_id: &str, detail: &str) {
                 task_id.to_string(),
                 "error",
                 "sync",
+                detail.to_string(),
+                now_ms(),
+            ),
+        );
+    }
+}
+
+fn log_info(db_path: &PathBuf, task_id: &str, event: &str, detail: &str) {
+    if let Ok(conn) = Connection::open(db_path) {
+        let _ = conn.execute(
+            "INSERT INTO logs (task_id, level, event, detail, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+            (
+                task_id.to_string(),
+                "info",
+                event.to_string(),
                 detail.to_string(),
                 now_ms(),
             ),
@@ -958,6 +1074,71 @@ fn db_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(path)
 }
 
+fn collect_share_paths_from_args() -> Vec<String> {
+    let mut args = std::env::args().skip(1);
+    let mut paths = Vec::new();
+    let mut collect_all = false;
+    while let Some(arg) = args.next() {
+        if collect_all {
+            if !arg.trim().is_empty() {
+                paths.push(arg);
+            }
+            continue;
+        }
+        if arg == "--share" {
+            collect_all = true;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--share=") {
+            if !value.trim().is_empty() {
+                paths.push(value.to_string());
+            }
+        }
+    }
+    paths
+}
+
+fn emit_share_requests(app: &AppHandle, paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        for path in paths {
+            let _ = window.emit(
+                "share-request",
+                ShareRequestPayload { path },
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_linux_share_menus() -> Result<(), Box<dyn Error>> {
+    let exe_path = std::env::current_exe()?.to_string_lossy().to_string();
+    let base = directories::BaseDirs::new().ok_or("failed to locate data dir")?;
+    let data_dir = base.data_dir();
+
+    let nautilus_dir = data_dir.join("nautilus/scripts");
+    fs::create_dir_all(&nautilus_dir)?;
+    let nautilus_script = nautilus_dir.join("Cloudreve Sync - Create Share Link");
+    let script_body = format!("#!/bin/sh\n\"{}\" --share \"$@\"\n", exe_path.replace('"', "\\\""));
+    fs::write(&nautilus_script, script_body)?;
+    let mut perms = fs::metadata(&nautilus_script)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&nautilus_script, perms)?;
+
+    let kde_dir = data_dir.join("kservices5/ServiceMenus");
+    fs::create_dir_all(&kde_dir)?;
+    let kde_menu = kde_dir.join("cloudreve-sync-share.desktop");
+    let menu_body = format!(
+        "[Desktop Entry]\nType=Service\nX-KDE-ServiceTypes=KonqPopupMenu/Plugin\nMimeType=all/all;\nActions=cloudreveShare;\nX-KDE-Submenu=Cloudreve Sync\n\n[Desktop Action cloudreveShare]\nName=创建分享链接\nIcon=cloudreve-sync\nExec=\"{}\" --share %F\n",
+        exe_path.replace('"', "\\\"")
+    );
+    fs::write(&kde_menu, menu_body)?;
+
+    Ok(())
+}
+
 fn refresh_tokens_once(db_path: &PathBuf) -> Result<(), Box<dyn Error>> {
     let conn = Connection::open(db_path)?;
     init_db(&conn)?;
@@ -1013,6 +1194,13 @@ fn main() {
             let handle = app.handle();
             setup_tray(&handle)?;
             setup_window_events(&handle);
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(err) = install_linux_share_menus() {
+                    eprintln!("failed to install share menu: {}", err);
+                }
+            }
+            emit_share_requests(&handle, collect_share_paths_from_args());
             let state = app.state::<AppState>();
             let db_path = state.db_path.clone();
             thread::spawn(move || loop {
@@ -1031,6 +1219,7 @@ fn main() {
             list_tasks_command,
             list_accounts_command,
             list_remote_entries_command,
+            create_share_link_command,
             get_settings_command,
             save_settings_command,
             clear_credentials_command,

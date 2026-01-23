@@ -58,6 +58,12 @@ export interface ListRemoteEntriesRequest {
   uri: string;
 }
 
+export interface CreateShareLinkRequest {
+  local_path: string;
+  password?: string;
+  expire_seconds?: number;
+}
+
 export async function login(payload: LoginRequest): Promise<LoginResult> {
   return invoke("login", { payload });
 }
@@ -151,6 +157,10 @@ export async function stopSync(payload: SyncRequest) {
 
 export async function deleteTask(payload: DeleteTaskRequest) {
   return invoke("delete_task_command", { payload });
+}
+
+export async function createShareLink(payload: CreateShareLinkRequest): Promise<string> {
+  return invoke("create_share_link_command", { payload });
 }
 
 export async function fetchBootstrap(): Promise<BootstrapPayload> {

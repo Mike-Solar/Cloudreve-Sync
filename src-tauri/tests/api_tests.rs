@@ -200,3 +200,40 @@ async fn list_directory_entries_returns_dirs_and_files() {
     assert!(!entries[1].is_dir);
     mock.assert();
 }
+
+#[tokio::test]
+async fn create_share_link_posts_expected_payload() {
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(httpmock::Method::PUT)
+            .path("/api/v4/share")
+            .json_body(json!({
+                "permissions": {
+                    "anonymous": "BQ==",
+                    "everyone": "AQ=="
+                },
+                "uri": "cloudreve://my/Work/a.txt",
+                "is_private": true,
+                "share_view": false,
+                "expire": 3600,
+                "password": "abc123"
+            }));
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(r#"{"code":0,"data":"https://example.com/s/abc123","msg":""}"#);
+    });
+
+    let api_paths = ApiPaths::default();
+    let client = CloudreveClient::new(server.url("/api/v4"), None, api_paths);
+    let link = client
+        .create_share_link(
+            "cloudreve://my/Work/a.txt",
+            Some("abc123".to_string()),
+            Some(3600),
+            Some(false),
+        )
+        .await
+        .expect("share link");
+    assert_eq!(link, "https://example.com/s/abc123");
+    mock.assert();
+}

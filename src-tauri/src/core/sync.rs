@@ -157,12 +157,15 @@ impl SyncEngine {
                         .map(|e| e.last_remote_sha256 != remote.sha256 || e.last_remote_mtime_ms != remote.mtime_ms)
                         .unwrap_or(true);
 
-                    if local_changed && remote_changed && local.sha256 != remote.sha256 {
+                    if entry.is_some() && local_changed && remote_changed && local.sha256 != remote.sha256 {
                         self.handle_conflict(&mut conn, local, remote).await?;
                         continue;
                     }
 
-                    if local_changed {
+                    let prefer_local =
+                        local_changed
+                            && (!remote_changed || entry.is_none() || local.mtime_ms >= remote.mtime_ms);
+                    if prefer_local {
                         self.upload_local(&mut conn, local, remote, &mut stats).await?;
                     } else if remote_changed {
                         self.download_remote(&mut conn, local, remote, &mut stats).await?;

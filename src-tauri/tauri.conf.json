@@ -10,7 +10,15 @@
   "version": "0.1.0",
   "identifier": "cn.mikesolar.cloudreve-sync",
   "bundle": {
-    "icon": ["icons/icon.png", "icons/icon.ico"]
+    "active": true,
+    "targets": ["deb", "rpm", "appimage", "nsis", "msi"],
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "license": "GPL-3.0-only",
+    "resources": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "resources/cloudreve-sync.desktop"
+    ]
   },
   "app": {
     "windows": [
