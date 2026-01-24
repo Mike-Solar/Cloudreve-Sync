@@ -1,7 +1,6 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
-use self::CloudreveError::Unknown;
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[repr(u32)]

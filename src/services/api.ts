@@ -7,7 +7,8 @@ import type {
   AccountItem,
   AppSettings,
   DiagnosticInfo,
-  RemoteEntry
+  RemoteEntry,
+  LogsPage
 } from "./types";
 
 export interface LoginRequest {
@@ -42,6 +43,8 @@ export interface CreateTaskRequest {
 export interface LogsQuery {
   task_id?: string;
   level?: string;
+  page?: number;
+  page_size?: number;
 }
 
 export interface SyncRequest {
@@ -143,7 +146,7 @@ export async function exportLogs(query: LogsQuery): Promise<string> {
   });
 }
 
-export async function listLogs(query: LogsQuery): Promise<ActivityItem[]> {
+export async function listLogs(query: LogsQuery): Promise<LogsPage> {
   return invoke("list_logs_command", { query });
 }
 

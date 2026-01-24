@@ -7,7 +7,7 @@ use core::cloudreve::{
 use core::config::{ApiPaths, AppSettings, config_dir, ensure_dir};
 use core::credentials::{load_tokens, store_tokens};
 use core::db::{
-    create_task, delete_all_accounts, delete_conflict, delete_task, init_db, list_accounts, list_conflicts, list_logs,
+    count_logs, create_task, delete_all_accounts, delete_conflict, delete_task, init_db, list_accounts, list_conflicts, list_logs,
     list_tasks, now_ms, upsert_account, AccountRow, TaskRow,
 };
 use core::sync::{SyncEngine, SyncStats};
@@ -169,6 +169,8 @@ struct CreateTaskRequest {
 struct LogsQuery {
     task_id: Option<String>,
     level: Option<String>,
+    page: Option<u32>,
+    page_size: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -533,7 +535,7 @@ fn open_external(url: String) -> Result<(), String> {
 fn export_logs_command(state: tauri::State<AppState>, task_id: Option<String>, level: Option<String>) -> Result<String, String> {
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
     init_db(&conn).map_err(|err| err.to_string())?;
-    let logs = list_logs(&conn, task_id.as_deref(), level.as_deref()).map_err(|err| err.to_string())?;
+    let logs = list_logs(&conn, task_id.as_deref(), level.as_deref(), None, None).map_err(|err| err.to_string())?;
     let base_dir = config_dir().map_err(|err| err.to_string())?;
     let export_dir = base_dir.join("exports");
     ensure_dir(&export_dir).map_err(|err| err.to_string())?;
@@ -660,10 +662,24 @@ fn relpath_from_local(local_root: &str, local_path: &Path) -> Result<String, Str
 }
 
 #[tauri::command]
-fn list_logs_command(state: tauri::State<AppState>, query: LogsQuery) -> Result<Vec<ActivityItem>, String> {
+fn list_logs_command(state: tauri::State<AppState>, query: LogsQuery) -> Result<LogsPage, String> {
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
-    let logs = list_logs(&conn, query.task_id.as_deref(), query.level.as_deref()).map_err(|err| err.to_string())?;
-    Ok(logs
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(50).clamp(10, 200);
+    let offset = (page - 1) * page_size;
+    let total = count_logs(&conn, query.task_id.as_deref(), query.level.as_deref())
+        .map_err(|err| err.to_string())?;
+    let logs = list_logs(
+        &conn,
+        query.task_id.as_deref(),
+        query.level.as_deref(),
+        Some(page_size),
+        Some(offset),
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(LogsPage {
+        total,
+        items: logs
         .into_iter()
         .map(|log| ActivityItem {
             timestamp: format_time(log.created_at_ms),
@@ -671,7 +687,8 @@ fn list_logs_command(state: tauri::State<AppState>, query: LogsQuery) -> Result<
             detail: log.detail,
             level: log.level,
         })
-        .collect())
+        .collect(),
+    })
 }
 
 #[tauri::command]
@@ -745,7 +762,7 @@ fn bootstrap(state: tauri::State<AppState>) -> Result<BootstrapPayload, String> 
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
     let tasks = build_task_items(&state, &conn).map_err(|err| err.to_string())?;
     let conflicts = list_conflicts(&conn, None).map_err(|err| err.to_string())?;
-    let logs = list_logs(&conn, None, None).map_err(|err| err.to_string())?;
+    let logs = list_logs(&conn, None, None, None, None).map_err(|err| err.to_string())?;
 
     let today = Local::now().date_naive();
     let mut upload_count = 0;
@@ -895,7 +912,7 @@ fn load_task_settings(db_path: &PathBuf, task_id: &str) -> Result<(TaskRow, Task
 }
 
 fn latest_log_time(conn: &Connection, task_id: &str) -> Option<i64> {
-    let logs = list_logs(conn, Some(task_id), None).ok()?;
+    let logs = list_logs(conn, Some(task_id), None, None, None).ok()?;
     logs.first().map(|log| log.created_at_ms)
 }
 
@@ -1238,4 +1255,9 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+#[derive(Serialize)]
+struct LogsPage {
+    total: u32,
+    items: Vec<ActivityItem>,
 }

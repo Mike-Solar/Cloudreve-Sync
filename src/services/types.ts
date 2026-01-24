@@ -24,6 +24,11 @@ export interface ActivityItem {
   level: string;
 }
 
+export interface LogsPage {
+  total: number;
+  items: ActivityItem[];
+}
+
 export interface ConflictItem {
   id: string;
   task_id: string;

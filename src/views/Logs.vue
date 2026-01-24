@@ -21,19 +21,33 @@
         </el-select>
         <el-input v-model="search" placeholder="文件名 / 路径 / 错误码" />
       </div>
-      <el-table :data="filtered" class="table-flat">
-        <el-table-column prop="timestamp" label="时间" width="160" />
-        <el-table-column prop="event" label="类型" width="120" />
-        <el-table-column prop="detail" label="详情" />
-        <el-table-column prop="level" label="级别" width="100" />
-      </el-table>
+      <div class="log-table" @scroll="handleTableScroll">
+        <el-table :data="filtered" class="table-flat" height="100%">
+          <el-table-column prop="timestamp" label="时间" width="160" />
+          <el-table-column prop="event" label="类型" width="120" />
+          <el-table-column prop="detail" label="详情" />
+          <el-table-column prop="level" label="级别" width="100" />
+        </el-table>
+      </div>
+      <div class="log-pagination">
+        <el-pagination
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :total="total"
+          :page-size="pageSize"
+          :current-page="page"
+          :page-sizes="[10, 20, 50, 100, 200]"
+          @update:current-page="handlePageChange"
+          @update:page-size="handlePageSizeChange"
+        />
+      </div>
     </el-card>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { ActivityItem } from "../services/types";
+import type { ActivityItem, LogsPage } from "../services/types";
 import { exportLogs, listLogs, openLocalPath } from "../services/api";
 import { ElMessage } from "element-plus";
 
@@ -41,17 +55,28 @@ const logs = ref<ActivityItem[]>([]);
 const search = ref("");
 const level = ref("");
 const taskId = ref("");
+const page = ref(1);
+const pageSize = ref(50);
+const total = ref(0);
 let refreshTimer: number | null = null;
 const autoRefresh = ref(true);
+let scrollResumeTimer: number | null = null;
 
 const refresh = async () => {
-  logs.value = await listLogs({
+  const result: LogsPage = await listLogs({
     task_id: taskId.value || undefined,
-    level: level.value || undefined
+    level: level.value || undefined,
+    page: page.value,
+    page_size: pageSize.value
   });
+  logs.value = result.items;
+  total.value = result.total;
 };
 
-watch([level, taskId], refresh);
+watch([level, taskId], () => {
+  page.value = 1;
+  refresh();
+});
 
 const filtered = computed(() => {
   return logs.value.filter(item => {
@@ -89,6 +114,17 @@ const resumeAutoRefresh = () => {
   }
 };
 
+const handleTableScroll = () => {
+  pauseAutoRefresh();
+  if (scrollResumeTimer) {
+    window.clearTimeout(scrollResumeTimer);
+  }
+  scrollResumeTimer = window.setTimeout(() => {
+    scrollResumeTimer = null;
+    resumeAutoRefresh();
+  }, 1500);
+};
+
 onMounted(() => {
   refresh();
   if (autoRefresh.value) {
@@ -106,6 +142,10 @@ watch(autoRefresh, value => {
 
 onBeforeUnmount(() => {
   stopAutoRefresh();
+  if (scrollResumeTimer) {
+    window.clearTimeout(scrollResumeTimer);
+    scrollResumeTimer = null;
+  }
 });
 
 const exportLogFile = async () => {
@@ -125,13 +165,44 @@ watch(search, value => {
   }
 });
 
-watch(taskId, () => {
+const handlePageChange = (value: number) => {
+  page.value = value;
   pauseAutoRefresh();
   refresh().finally(resumeAutoRefresh);
-});
+};
 
-watch(level, () => {
+const handlePageSizeChange = (value: number) => {
+  pageSize.value = value;
+  page.value = 1;
   pauseAutoRefresh();
   refresh().finally(resumeAutoRefresh);
-});
+};
 </script>
+
+<style scoped>
+.logs-view {
+  height: 100%;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 180px);
+}
+
+.log-table {
+  flex: 1;
+  min-height: 240px;
+  overflow: auto;
+}
+
+.log-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+}
+
+.log-table :deep(.el-table__body-wrapper) {
+  overflow: visible;
+}
+</style>

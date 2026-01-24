@@ -196,7 +196,7 @@ impl CloudreveClient {
     pub async fn ping(&self) -> Result<(), Box<dyn Error>> {
         let url = format!("{}/site/ping", self.base_url);
         let response = self.client.get(url).send().await?;
-        let response = parse_api_response::<Value>(response).await?;
+        let _response = parse_api_response::<Value>(response).await?;
         Ok(())
     }
 

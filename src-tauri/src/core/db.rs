@@ -1,6 +1,7 @@
 use chrono::Utc;
 use serde::Serialize;
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, params_from_iter, Connection, Result};
+use rusqlite::types::Value;
 
 #[derive(Debug, Clone)]
 pub struct TaskRow {
@@ -360,82 +361,76 @@ pub fn insert_log(conn: &Connection, log: &LogRow) -> Result<()> {
     Ok(())
 }
 
-pub fn list_logs(conn: &Connection, task_id: Option<&str>, level: Option<&str>) -> Result<Vec<LogRow>> {
+pub fn list_logs(
+    conn: &Connection,
+    task_id: Option<&str>,
+    level: Option<&str>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Vec<LogRow>> {
     let mut sql = "SELECT task_id, level, event, detail, created_at_ms FROM logs".to_string();
     let mut filters = Vec::new();
+    let mut params_vec: Vec<Value> = Vec::new();
     if task_id.is_some() {
         filters.push("task_id = ?1".to_string());
+        params_vec.push(task_id.unwrap().to_string().into());
     }
     if level.is_some() {
         filters.push(if task_id.is_some() { "level = ?2" } else { "level = ?1" }.to_string());
+        params_vec.push(level.unwrap().to_string().into());
     }
     if !filters.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&filters.join(" AND "));
     }
     sql.push_str(" ORDER BY created_at_ms DESC");
+    if limit.is_some() {
+        let idx = params_vec.len() + 1;
+        sql.push_str(&format!(" LIMIT ?{}", idx));
+        params_vec.push(Value::from(limit.unwrap() as i64));
+        if offset.is_some() {
+            let idx = params_vec.len() + 1;
+            sql.push_str(&format!(" OFFSET ?{}", idx));
+            params_vec.push(Value::from(offset.unwrap() as i64));
+        }
+    }
 
     let mut stmt = conn.prepare(&sql)?;
     let mut out = Vec::new();
-    match (task_id, level) {
-        (Some(task_id), Some(level)) => {
-            let rows = stmt.query_map(params![task_id, level], |row| {
-                Ok(LogRow {
-                    task_id: row.get(0)?,
-                    level: row.get(1)?,
-                    event: row.get(2)?,
-                    detail: row.get(3)?,
-                    created_at_ms: row.get(4)?,
-                })
-            })?;
-            for row in rows {
-                out.push(row?);
-            }
-        }
-        (Some(task_id), None) => {
-            let rows = stmt.query_map(params![task_id], |row| {
-                Ok(LogRow {
-                    task_id: row.get(0)?,
-                    level: row.get(1)?,
-                    event: row.get(2)?,
-                    detail: row.get(3)?,
-                    created_at_ms: row.get(4)?,
-                })
-            })?;
-            for row in rows {
-                out.push(row?);
-            }
-        }
-        (None, Some(level)) => {
-            let rows = stmt.query_map(params![level], |row| {
-                Ok(LogRow {
-                    task_id: row.get(0)?,
-                    level: row.get(1)?,
-                    event: row.get(2)?,
-                    detail: row.get(3)?,
-                    created_at_ms: row.get(4)?,
-                })
-            })?;
-            for row in rows {
-                out.push(row?);
-            }
-        }
-        (None, None) => {
-            let rows = stmt.query_map([], |row| {
-                Ok(LogRow {
-                    task_id: row.get(0)?,
-                    level: row.get(1)?,
-                    event: row.get(2)?,
-                    detail: row.get(3)?,
-                    created_at_ms: row.get(4)?,
-                })
-            })?;
-            for row in rows {
-                out.push(row?);
-            }
-        }
+    let rows = stmt.query_map(params_from_iter(params_vec), |row| {
+        Ok(LogRow {
+            task_id: row.get(0)?,
+            level: row.get(1)?,
+            event: row.get(2)?,
+            detail: row.get(3)?,
+            created_at_ms: row.get(4)?,
+        })
+    })?;
+    for row in rows {
+        out.push(row?);
     }
     Ok(out)
+}
+
+pub fn count_logs(conn: &Connection, task_id: Option<&str>, level: Option<&str>) -> Result<u32> {
+    let mut sql = "SELECT COUNT(1) FROM logs".to_string();
+    let mut filters = Vec::new();
+    let mut params_vec: Vec<Value> = Vec::new();
+    if task_id.is_some() {
+        filters.push("task_id = ?1".to_string());
+        params_vec.push(task_id.unwrap().to_string().into());
+    }
+    if level.is_some() {
+        filters.push(if task_id.is_some() { "level = ?2" } else { "level = ?1" }.to_string());
+        params_vec.push(level.unwrap().to_string().into());
+    }
+    if !filters.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&filters.join(" AND "));
+    }
+    let mut stmt = conn.prepare(&sql)?;
+    let count: u32 = stmt.query_row(params_from_iter(params_vec), |row| row.get(0))?;
+    Ok(count)
 }
 
 pub fn now_ms() -> i64 {

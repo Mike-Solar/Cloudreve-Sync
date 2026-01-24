@@ -1,16 +1,11 @@
 use std::collections::HashMap;
-use lazy_static::lazy_static;
-use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::hash::Hasher;
 use crate::core::error::CloudreveError;
 
 pub mod auth;
 pub mod common;
 pub mod user;
-
-use user::User;
 pub struct Connection {
     client: reqwest::Client,
     access_token: String,
@@ -149,4 +144,3 @@ where T: Serialize + for<'de> Deserialize<'de> + Clone{
         self.msg.clone()
     }
 }
-
