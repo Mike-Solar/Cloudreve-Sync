@@ -1,3 +1,1 @@
-pub fn get_captcha(){
-    
-}
+pub fn get_captcha() {}

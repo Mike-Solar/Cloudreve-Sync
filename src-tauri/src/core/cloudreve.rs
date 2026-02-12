@@ -41,7 +41,10 @@ async fn parse_api_response<T: DeserializeOwned>(
         None => {
             let empty = serde_json::json!({});
             serde_json::from_value::<T>(empty).map_err(|err| {
-                let message = format!("响应解析失败: status={} err=missing data {} body={}", status, err, text);
+                let message = format!(
+                    "响应解析失败: status={} err=missing data {} body={}",
+                    status, err, text
+                );
                 std::io::Error::new(std::io::ErrorKind::InvalidData, message)
             })?
         }
@@ -157,6 +160,8 @@ pub struct ListFilesData {
     pub context_hint: Option<String>,
     #[serde(default)]
     pub next_marker: Option<String>,
+    #[serde(default, alias = "next_page_token")]
+    pub next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +178,19 @@ pub struct FileEntry {
 }
 
 impl CloudreveClient {
+    fn decode_uri(value: &str) -> String {
+        urlencoding::decode(value)
+            .map(|v| v.into_owned())
+            .unwrap_or_else(|_| value.to_string())
+    }
+
+    fn effective_next_token(data: &ListFilesData) -> Option<String> {
+        data.next_marker
+            .clone()
+            .or_else(|| data.next_page_token.clone())
+            .filter(|token| !token.trim().is_empty())
+    }
+
     pub fn new(base_url: String, access_token: Option<String>, api_paths: ApiPaths) -> Self {
         let base_url = if base_url.ends_with("/api/v4") {
             base_url
@@ -200,14 +218,22 @@ impl CloudreveClient {
         Ok(())
     }
 
-    pub async fn list_files(&self, uri: &str, page: Option<u32>) -> Result<ListFilesData, Box<dyn Error>> {
+    pub async fn list_files(
+        &self,
+        uri: &str,
+        page: Option<u32>,
+        next_page_token: Option<&str>,
+    ) -> Result<ListFilesData, Box<dyn Error>> {
+        let normalized_uri = Self::decode_uri(uri);
         let mut url = format!(
-            "{}{}?uri={}",
+            "{}{}?uri={}&page_size=200",
             self.base_url,
             self.api_paths.list_files,
-            urlencoding::encode(uri)
+            urlencoding::encode(&normalized_uri)
         );
-        if let Some(page) = page {
+        if let Some(token) = next_page_token {
+            url.push_str(&format!("&next_page_token={}", urlencoding::encode(token)));
+        } else if let Some(page) = page {
             url.push_str(&format!("&page={}", page));
         }
         let response = self.apply_auth(self.client.get(url)).send().await?;
@@ -217,23 +243,28 @@ impl CloudreveClient {
 
     pub async fn list_all_files(&self, uri: &str) -> Result<Vec<RemoteFile>, Box<dyn Error>> {
         let mut page = 1u32;
+        let mut next_page_token: Option<String> = None;
         let mut output = Vec::new();
         loop {
-            let data = self.list_files(uri, Some(page)).await?;
+            let data = self
+                .list_files(uri, Some(page), next_page_token.as_deref())
+                .await?;
+            let next_token = Self::effective_next_token(&data);
             for item in data.files {
                 let metadata = item.metadata.unwrap_or_default();
                 let is_dir = item.file_type == 1;
                 output.push(RemoteFile {
                     id: item.id,
                     name: item.name,
-                    uri: item.path,
+                    uri: Self::decode_uri(&item.path),
                     size: item.size,
                     updated_at: item.updated_at,
                     metadata,
                     is_dir,
                 });
             }
-            if data.next_marker.is_none() {
+            next_page_token = next_token;
+            if next_page_token.is_none() {
                 break;
             }
             page += 1;
@@ -241,20 +272,28 @@ impl CloudreveClient {
         Ok(output)
     }
 
-    pub async fn list_directory_entries(&self, uri: &str) -> Result<Vec<RemoteEntry>, Box<dyn Error>> {
+    pub async fn list_directory_entries(
+        &self,
+        uri: &str,
+    ) -> Result<Vec<RemoteEntry>, Box<dyn Error>> {
         let mut page = 1u32;
+        let mut next_page_token: Option<String> = None;
         let mut output = Vec::new();
         loop {
-            let data = self.list_files(uri, Some(page)).await?;
+            let data = self
+                .list_files(uri, Some(page), next_page_token.as_deref())
+                .await?;
+            let next_token = Self::effective_next_token(&data);
             for item in data.files {
                 let is_dir = item.file_type == 1;
                 output.push(RemoteEntry {
                     name: item.name,
-                    uri: item.path,
+                    uri: Self::decode_uri(&item.path),
                     is_dir,
                 });
             }
-            if data.next_marker.is_none() {
+            next_page_token = next_token;
+            if next_page_token.is_none() {
                 break;
             }
             page += 1;
@@ -288,7 +327,9 @@ impl CloudreveClient {
     }
 
     pub async fn download_file(&self, uri: &str) -> Result<Vec<u8>, Box<dyn Error>> {
-        let result = self.create_download_urls(vec![uri.to_string()], true).await?;
+        let result = self
+            .create_download_urls(vec![uri.to_string()], true)
+            .await?;
         let url = result
             .urls
             .first()
@@ -298,7 +339,11 @@ impl CloudreveClient {
         Ok(bytes.to_vec())
     }
 
-    pub async fn update_file_content(&self, uri: &str, content: &[u8]) -> Result<(), Box<dyn Error>> {
+    pub async fn update_file_content(
+        &self,
+        uri: &str,
+        content: &[u8],
+    ) -> Result<(), Box<dyn Error>> {
         let url = format!(
             "{}{}?uri={}",
             self.base_url,
@@ -318,16 +363,18 @@ impl CloudreveClient {
         &self,
         uri: &str,
         size: u64,
-        policy_id: &str,
+        policy_id: Option<&str>,
         last_modified: Option<i64>,
         mime_type: Option<&str>,
     ) -> Result<UploadSession, Box<dyn Error>> {
         let url = format!("{}{}", self.base_url, self.api_paths.create_upload_session);
         let mut payload = serde_json::json!({
             "uri": uri,
-            "size": size,
-            "policy_id": policy_id
+            "size": size
         });
+        if let Some(policy_id) = policy_id {
+            payload["policy_id"] = serde_json::json!(policy_id);
+        }
         if let Some(last_modified) = last_modified {
             payload["last_modified"] = serde_json::json!(last_modified);
         }
@@ -508,11 +555,7 @@ pub async fn password_sign_in(
     if let Some(ticket) = ticket {
         body["ticket"] = serde_json::json!(ticket);
     }
-    let response = reqwest::Client::new()
-        .post(url)
-        .json(&body)
-        .send()
-        .await?;
+    let response = reqwest::Client::new().post(url).json(&body).send().await?;
     let response = parse_api_envelope(response).await?;
     if response.code == 0 {
         let data_value = response.data.ok_or_else(|| {

@@ -2,9 +2,10 @@ use rusqlite::Connection;
 use tempfile::NamedTempFile;
 
 use cloudreve_sync_app::core::db::{
-    create_task, delete_task, init_db, insert_conflict, insert_log, insert_tombstone, list_accounts, list_conflicts,
-    list_entries_by_task, list_logs, list_tasks, list_tombstones, now_ms, upsert_account, upsert_entry, AccountRow,
-    ConflictRow, EntryRow, LogRow, TaskRow, TombstoneRow,
+    create_task, delete_task, init_db, insert_conflict, insert_log, insert_tombstone,
+    list_accounts, list_conflicts, list_entries_by_task, list_logs, list_tasks, list_tombstones,
+    now_ms, upsert_account, upsert_entry, AccountRow, ConflictRow, EntryRow, LogRow, TaskRow,
+    TombstoneRow,
 };
 
 #[test]
@@ -176,9 +177,16 @@ fn db_filters_and_updates() {
     };
     insert_conflict(&conn, &conflict_a).expect("insert conflict a");
     insert_conflict(&conn, &conflict_b).expect("insert conflict b");
-    assert_eq!(list_conflicts(&conn, None).expect("list conflicts all").len(), 2);
     assert_eq!(
-        list_conflicts(&conn, Some(&task_a.task_id)).expect("list conflicts a").len(),
+        list_conflicts(&conn, None)
+            .expect("list conflicts all")
+            .len(),
+        2
+    );
+    assert_eq!(
+        list_conflicts(&conn, Some(&task_a.task_id))
+            .expect("list conflicts a")
+            .len(),
         1
     );
 
@@ -199,11 +207,15 @@ fn db_filters_and_updates() {
     insert_log(&conn, &log_info).expect("insert log info");
     insert_log(&conn, &log_warn).expect("insert log warn");
     assert_eq!(
-        list_logs(&conn, Some(&task_a.task_id), Some("info")).expect("list logs info").len(),
+        list_logs(&conn, Some(&task_a.task_id), Some("info"))
+            .expect("list logs info")
+            .len(),
         1
     );
     assert_eq!(
-        list_logs(&conn, Some(&task_a.task_id), Some("warn")).expect("list logs warn").len(),
+        list_logs(&conn, Some(&task_a.task_id), Some("warn"))
+            .expect("list logs warn")
+            .len(),
         1
     );
 }
@@ -269,8 +281,16 @@ fn delete_task_removes_related_rows() {
 
     delete_task(&conn, &task.task_id).expect("delete task");
     assert!(list_tasks(&conn).expect("list tasks").is_empty());
-    assert!(list_entries_by_task(&conn, &task.task_id).expect("list entries").is_empty());
-    assert!(list_tombstones(&conn, &task.task_id).expect("list tombstones").is_empty());
-    assert!(list_conflicts(&conn, Some(&task.task_id)).expect("list conflicts").is_empty());
-    assert!(list_logs(&conn, Some(&task.task_id), None).expect("list logs").is_empty());
+    assert!(list_entries_by_task(&conn, &task.task_id)
+        .expect("list entries")
+        .is_empty());
+    assert!(list_tombstones(&conn, &task.task_id)
+        .expect("list tombstones")
+        .is_empty());
+    assert!(list_conflicts(&conn, Some(&task.task_id))
+        .expect("list conflicts")
+        .is_empty());
+    assert!(list_logs(&conn, Some(&task.task_id), None)
+        .expect("list logs")
+        .is_empty());
 }

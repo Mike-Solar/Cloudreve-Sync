@@ -17,6 +17,7 @@
       <el-table-column prop="mode" label="模式" width="100" />
       <el-table-column prop="local_path" label="本地目录" />
       <el-table-column prop="remote_path" label="云端目录" />
+      <el-table-column prop="progress_text" label="进度" width="240" />
       <el-table-column label="状态" width="140">
         <template #default="{ row }">
           <el-tag :type="statusTone(row.status)" effect="dark">{{ row.status }}</el-tag>
@@ -25,7 +26,7 @@
       <el-table-column label="操作" width="220">
         <template #default="{ row }">
           <el-button size="small" @click="toggleSync(row)">
-            {{ row.status === "Syncing" ? "暂停" : "同步" }}
+            {{ isRunningStatus(row.status) ? "暂停" : "同步" }}
           </el-button>
           <el-button size="small" plain @click="removeTask(row)">移除</el-button>
         </template>
@@ -201,7 +202,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { TaskItem, AccountItem, RemoteEntry } from "../services/types";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { TaskItem, AccountItem, RemoteEntry, TaskRuntimePayload } from "../services/types";
 import {
   createTask,
   deleteTask,
@@ -222,7 +224,7 @@ const accounts = ref<AccountItem[]>([]);
 const selectedAccountKey = ref("");
 const onlyErrors = ref(false);
 const onlyConflicts = ref(false);
-const recent = ref(true);
+const recent = ref(false);
 const wizardVisible = ref(false);
 const step = ref(0);
 const captchaImage = ref<string | null>(null);
@@ -240,7 +242,7 @@ const remoteBrowserEntries = ref<RemoteEntry[]>([]);
 const remoteBrowserUri = ref("cloudreve://my");
 const remoteBrowserLoading = ref(false);
 const createLoading = ref(false);
-let refreshTimer: number | null = null;
+let unlistenTaskRuntime: UnlistenFn | null = null;
 
 const NEW_ACCOUNT_KEY = "__new__";
 
@@ -263,6 +265,21 @@ const refresh = async () => {
   tasks.value = await listTasks();
 };
 
+const applyTaskRuntime = (payload: TaskRuntimePayload) => {
+  const index = tasks.value.findIndex(item => item.id === payload.task_id);
+  if (index < 0) return;
+  const current = tasks.value[index];
+  tasks.value[index] = {
+    ...current,
+    status: payload.status || current.status,
+    progress_text: payload.progress_text || current.progress_text,
+    rate_up: payload.rate_up,
+    rate_down: payload.rate_down,
+    queue: payload.queue,
+    last_sync: payload.last_sync || current.last_sync
+  };
+};
+
 const loadAccounts = async () => {
   accounts.value = await listAccounts();
 };
@@ -281,8 +298,10 @@ const filtered = computed(() => {
   });
 });
 
+const isRunningStatus = (status: string) => ["Syncing", "Hashing", "ListingRemote"].includes(status);
+
 const statusTone = (status: string) => {
-  if (status === "Syncing") return "success";
+  if (isRunningStatus(status)) return "success";
   if (status === "Error") return "danger";
   if (status === "Paused") return "warning";
   return "info";
@@ -388,10 +407,17 @@ const browseLocalRoot = async () => {
 };
 
 const normalizeRemoteUri = (value: string) => {
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  })();
   if (!value) return "cloudreve://my";
-  if (value.startsWith("cloudreve://")) return value;
-  if (value.startsWith("/")) return `cloudreve://my${value}`;
-  return `cloudreve://my/${value}`;
+  if (decoded.startsWith("cloudreve://")) return decoded;
+  if (decoded.startsWith("/")) return `cloudreve://my${decoded}`;
+  return `cloudreve://my/${decoded}`;
 };
 
 const parentRemoteUri = (uri: string) => {
@@ -558,7 +584,7 @@ const submitTask = async () => {
   }
   try {
     createLoading.value = true;
-    await createTask({
+    const createdTaskId = await createTask({
       name: wizard.value.task_name || "新任务",
       base_url: wizard.value.base_url,
       account_key: wizard.value.account_key,
@@ -574,11 +600,8 @@ const submitTask = async () => {
     recent.value = false;
     await refresh();
     if (wizard.value.first_sync === "sync") {
-      const created = tasks.value.find(item => item.name === (wizard.value.task_name || "新任务"));
-      if (created) {
-        await runSync({ task_id: created.id });
-        await refresh();
-      }
+      await runSync({ task_id: createdTaskId });
+      await refresh();
     }
     ElMessage.success("任务已创建");
   } catch (err) {
@@ -589,7 +612,7 @@ const submitTask = async () => {
 };
 
 const toggleSync = async (row: TaskItem) => {
-  if (row.status === "Syncing") {
+  if (isRunningStatus(row.status)) {
     await stopSync({ task_id: row.id });
   } else {
     await runSync({ task_id: row.id });
@@ -624,14 +647,15 @@ onMounted(async () => {
   const data = await fetchBootstrap();
   tasks.value = data.tasks;
   await loadAccounts();
-  refreshTimer = window.setInterval(async () => {
-    await refresh();
-  }, 1000);
+  unlistenTaskRuntime = await listen<TaskRuntimePayload>("task-runtime", event => {
+    applyTaskRuntime(event.payload);
+  });
 });
 
 onBeforeUnmount(() => {
-  if (refreshTimer) {
-    window.clearInterval(refreshTimer);
+  if (unlistenTaskRuntime) {
+    unlistenTaskRuntime();
+    unlistenTaskRuntime = null;
   }
 });
 

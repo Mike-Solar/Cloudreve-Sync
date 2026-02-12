@@ -83,7 +83,7 @@ export async function testConnection(account_key: string, base_url: string) {
   return invoke("test_connection", { accountKey: account_key, baseUrl: base_url });
 }
 
-export async function createTask(payload: CreateTaskRequest) {
+export async function createTask(payload: CreateTaskRequest): Promise<string> {
   return invoke("create_task_command", { payload });
 }
 

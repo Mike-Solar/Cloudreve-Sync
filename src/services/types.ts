@@ -11,6 +11,7 @@ export interface TaskItem {
   local_path: string;
   remote_path: string;
   status: string;
+  progress_text: string;
   rate_up: string;
   rate_down: string;
   queue: number;
@@ -87,4 +88,14 @@ export interface BootstrapPayload {
   tasks: TaskItem[];
   activities: ActivityItem[];
   conflicts: ConflictItem[];
+}
+
+export interface TaskRuntimePayload {
+  task_id: string;
+  status: string;
+  progress_text: string;
+  rate_up: string;
+  rate_down: string;
+  queue: number;
+  last_sync: string;
 }

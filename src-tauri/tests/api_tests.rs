@@ -50,7 +50,10 @@ async fn list_all_files_handles_pagination() {
 
     let api_paths = ApiPaths::default();
     let client = CloudreveClient::new(server.url("/api/v4"), None, api_paths);
-    let result = client.list_all_files("cloudreve://root/Work").await.expect("list");
+    let result = client
+        .list_all_files("cloudreve://root/Work")
+        .await
+        .expect("list");
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].uri, "cloudreve://root/Work/a.txt");
     assert_eq!(result[1].uri, "cloudreve://root/Work/b.txt");

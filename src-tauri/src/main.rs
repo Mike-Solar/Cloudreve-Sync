@@ -1,41 +1,42 @@
 mod core;
 
+use chrono::{Local, TimeZone};
 use core::cloudreve::{
     finish_sign_in_with_2fa, get_captcha, password_sign_in, refresh_token, CloudreveClient,
     SignInResult,
 };
-use core::config::{ApiPaths, AppSettings, config_dir, ensure_dir};
+use core::config::{config_dir, ensure_dir, ApiPaths, AppSettings};
 use core::credentials::{load_tokens, store_tokens};
 use core::db::{
-    count_logs, create_task, delete_all_accounts, delete_conflict, delete_task, init_db, list_accounts, list_conflicts, list_logs,
-    list_tasks, now_ms, upsert_account, AccountRow, TaskRow,
+    count_logs, create_task, delete_all_accounts, delete_conflict, delete_task, init_db,
+    list_accounts, list_conflicts, list_logs, list_tasks, now_ms, upsert_account, AccountRow,
+    TaskRow,
 };
 use core::sync::{SyncEngine, SyncStats};
-use chrono::{Local, TimeZone};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::Emitter;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::Emitter;
 use tauri::{
-    AppHandle,
-    Manager,
-    WindowEvent,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, WindowEvent,
 };
 use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
+
+const TASK_RUNTIME_EVENT: &str = "task-runtime";
 
 #[derive(Clone)]
 struct RunnerHandle {
@@ -66,6 +67,7 @@ struct TaskItem {
     local_path: String,
     remote_path: String,
     status: String,
+    progress_text: String,
     rate_up: String,
     rate_down: String,
     queue: u32,
@@ -77,6 +79,17 @@ struct TaskStats {
     rate_up: String,
     rate_down: String,
     queue: u32,
+}
+
+#[derive(Serialize, Clone)]
+struct TaskRuntimePayload {
+    task_id: String,
+    status: String,
+    progress_text: String,
+    rate_up: String,
+    rate_down: String,
+    queue: u32,
+    last_sync: String,
 }
 
 #[derive(Serialize)]
@@ -210,7 +223,10 @@ struct ShareRequestPayload {
 }
 
 #[tauri::command]
-fn login(state: tauri::State<AppState>, payload: LoginRequest) -> Result<LoginCommandResult, String> {
+fn login(
+    state: tauri::State<AppState>,
+    payload: LoginRequest,
+) -> Result<LoginCommandResult, String> {
     let result = tauri::async_runtime::block_on(password_sign_in(
         &payload.base_url,
         &payload.email,
@@ -293,23 +309,31 @@ fn get_captcha_command(payload: String) -> Result<core::cloudreve::CaptchaData, 
 }
 
 #[tauri::command]
-fn test_connection(state: tauri::State<AppState>, account_key: String, base_url: String) -> Result<(), String> {
+fn test_connection(
+    state: tauri::State<AppState>,
+    account_key: String,
+    base_url: String,
+) -> Result<(), String> {
     let tokens = load_tokens(&account_key).map_err(|err| err.to_string())?;
     let client = CloudreveClient::new(base_url, Some(tokens.access_token), state.api_paths.clone());
     tauri::async_runtime::block_on(client.ping()).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn create_task_command(state: tauri::State<AppState>, payload: CreateTaskRequest) -> Result<(), String> {
+fn create_task_command(
+    state: tauri::State<AppState>,
+    payload: CreateTaskRequest,
+) -> Result<String, String> {
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
     init_db(&conn).map_err(|err| err.to_string())?;
 
     let task_id = Uuid::new_v4().to_string();
     let device_id = Uuid::new_v4().to_string();
-    let remote_root = if payload.remote_root_uri.starts_with("cloudreve://") {
-        payload.remote_root_uri.clone()
+    let remote_root_raw = decode_uri(&payload.remote_root_uri);
+    let remote_root = if remote_root_raw.starts_with("cloudreve://") {
+        remote_root_raw
     } else {
-        CloudreveClient::build_file_uri(&payload.remote_root_uri)
+        CloudreveClient::build_file_uri(&remote_root_raw)
     };
     let settings = TaskSettings {
         name: payload.name.clone(),
@@ -327,7 +351,7 @@ fn create_task_command(state: tauri::State<AppState>, payload: CreateTaskRequest
         created_at_ms: now_ms(),
     };
     create_task(&conn, &task).map_err(|err| err.to_string())?;
-    Ok(())
+    Ok(task_id)
 }
 
 #[tauri::command]
@@ -363,7 +387,8 @@ fn list_remote_entries_command(
         Some(tokens.access_token),
         state.api_paths.clone(),
     );
-    tauri::async_runtime::block_on(client.list_directory_entries(&payload.uri))
+    let uri = decode_uri(&payload.uri);
+    tauri::async_runtime::block_on(client.list_directory_entries(&uri))
         .map_err(|err| err.to_string())
 }
 
@@ -393,7 +418,11 @@ fn create_share_link_command(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let expire_seconds = payload.expire_seconds.filter(|value| *value > 0);
-    let client = CloudreveClient::new(task.base_url.clone(), Some(tokens.access_token), state.api_paths.clone());
+    let client = CloudreveClient::new(
+        task.base_url.clone(),
+        Some(tokens.access_token),
+        state.api_paths.clone(),
+    );
     let link = tauri::async_runtime::block_on(client.create_share_link(
         &uri,
         password,
@@ -401,11 +430,19 @@ fn create_share_link_command(
         Some(is_dir),
     ))
     .map_err(|err| err.to_string())?;
-    log_info(&state.db_path, &task.task_id, "share", &format!("{} -> {}", payload.local_path, link));
+    log_info(
+        &state.db_path,
+        &task.task_id,
+        "share",
+        &format!("{} -> {}", payload.local_path, link),
+    );
     Ok(link)
 }
 #[tauri::command]
-fn list_conflicts_command(state: tauri::State<AppState>, task_id: Option<String>) -> Result<Vec<ConflictItem>, String> {
+fn list_conflicts_command(
+    state: tauri::State<AppState>,
+    task_id: Option<String>,
+) -> Result<Vec<ConflictItem>, String> {
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
     let conflicts = list_conflicts(&conn, task_id.as_deref()).map_err(|err| err.to_string())?;
     let tasks = list_tasks(&conn).map_err(|err| err.to_string())?;
@@ -413,10 +450,7 @@ fn list_conflicts_command(state: tauri::State<AppState>, task_id: Option<String>
         .into_iter()
         .map(|task| {
             let settings = parse_settings(&task.settings_json);
-            (
-                task.task_id,
-                (settings.name, task.local_root),
-            )
+            (task.task_id, (settings.name, task.local_root))
         })
         .collect::<HashMap<_, _>>();
     Ok(conflicts
@@ -532,10 +566,15 @@ fn open_external(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn export_logs_command(state: tauri::State<AppState>, task_id: Option<String>, level: Option<String>) -> Result<String, String> {
+fn export_logs_command(
+    state: tauri::State<AppState>,
+    task_id: Option<String>,
+    level: Option<String>,
+) -> Result<String, String> {
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
     init_db(&conn).map_err(|err| err.to_string())?;
-    let logs = list_logs(&conn, task_id.as_deref(), level.as_deref(), None, None).map_err(|err| err.to_string())?;
+    let logs = list_logs(&conn, task_id.as_deref(), level.as_deref(), None, None)
+        .map_err(|err| err.to_string())?;
     let base_dir = config_dir().map_err(|err| err.to_string())?;
     let export_dir = base_dir.join("exports");
     ensure_dir(&export_dir).map_err(|err| err.to_string())?;
@@ -544,7 +583,8 @@ fn export_logs_command(state: tauri::State<AppState>, task_id: Option<String>, l
     let mut file = std::fs::File::create(&path).map_err(|err| err.to_string())?;
     for log in logs {
         let line = serde_json::to_string(&log).map_err(|err| err.to_string())?;
-        file.write_all(line.as_bytes()).map_err(|err| err.to_string())?;
+        file.write_all(line.as_bytes())
+            .map_err(|err| err.to_string())?;
         file.write_all(b"\n").map_err(|err| err.to_string())?;
     }
     Ok(path.to_string_lossy().to_string())
@@ -569,17 +609,30 @@ fn get_diagnostics_command(state: tauri::State<AppState>) -> Result<DiagnosticIn
 }
 
 #[tauri::command]
-fn mark_conflict_resolved(state: tauri::State<AppState>, task_id: String, conflict_relpath: String) -> Result<(), String> {
+fn mark_conflict_resolved(
+    state: tauri::State<AppState>,
+    task_id: String,
+    conflict_relpath: String,
+) -> Result<(), String> {
     let conn = Connection::open(&state.db_path).map_err(|err| err.to_string())?;
     delete_conflict(&conn, &task_id, &conflict_relpath).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn download_conflict_remote(state: tauri::State<AppState>, task_id: String, original_relpath: String) -> Result<(), String> {
-    let (task, settings) = load_task_settings(&state.db_path, &task_id).map_err(|err| err.to_string())?;
+fn download_conflict_remote(
+    state: tauri::State<AppState>,
+    task_id: String,
+    original_relpath: String,
+) -> Result<(), String> {
+    let (task, settings) =
+        load_task_settings(&state.db_path, &task_id).map_err(|err| err.to_string())?;
     let tokens = load_tokens(&settings.account_key).map_err(|err| err.to_string())?;
     let uri = build_remote_uri(&task.remote_root_uri, &original_relpath);
-    let client = CloudreveClient::new(task.base_url, Some(tokens.access_token), state.api_paths.clone());
+    let client = CloudreveClient::new(
+        task.base_url,
+        Some(tokens.access_token),
+        state.api_paths.clone(),
+    );
     let result = tauri::async_runtime::block_on(client.create_download_urls(vec![uri], true))
         .map_err(|err| err.to_string())?;
     let url = result
@@ -607,12 +660,14 @@ fn hash_local_file(path: String) -> Result<String, String> {
 
 fn build_remote_uri(root_uri: &str, relpath: &str) -> String {
     let root = root_uri.trim_end_matches('/');
-    let encoded = relpath
-        .split('/')
-        .map(|part| urlencoding::encode(part).to_string())
-        .collect::<Vec<_>>()
-        .join("/");
-    format!("{}/{}", root, encoded)
+    let rel = relpath.trim_start_matches('/');
+    format!("{}/{}", root, rel)
+}
+
+fn decode_uri(value: &str) -> String {
+    urlencoding::decode(value)
+        .map(|v| v.into_owned())
+        .unwrap_or_else(|_| value.to_string())
 }
 
 fn normalize_path_for_match(path: &Path) -> String {
@@ -651,7 +706,9 @@ fn find_task_for_local_path(tasks: &[TaskRow], local_path: &Path) -> Option<Task
 
 fn relpath_from_local(local_root: &str, local_path: &Path) -> Result<String, String> {
     let root = Path::new(local_root);
-    let rel = local_path.strip_prefix(root).map_err(|_| "路径不在同步目录下".to_string())?;
+    let rel = local_path
+        .strip_prefix(root)
+        .map_err(|_| "路径不在同步目录下".to_string())?;
     let mut parts = Vec::new();
     for component in rel.components() {
         if let std::path::Component::Normal(value) = component {
@@ -680,35 +737,49 @@ fn list_logs_command(state: tauri::State<AppState>, query: LogsQuery) -> Result<
     Ok(LogsPage {
         total,
         items: logs
-        .into_iter()
-        .map(|log| ActivityItem {
-            timestamp: format_time(log.created_at_ms),
-            event: log.event,
-            detail: log.detail,
-            level: log.level,
-        })
-        .collect(),
+            .into_iter()
+            .map(|log| ActivityItem {
+                timestamp: format_time(log.created_at_ms),
+                event: log.event,
+                detail: log.detail,
+                level: log.level,
+            })
+            .collect(),
     })
 }
 
 #[tauri::command]
-fn run_sync_command(state: tauri::State<AppState>, payload: SyncRequest) -> Result<(), String> {
-    let mut runners = state.runners.lock().map_err(|_| "runner lock error".to_string())?;
-    if runners.contains_key(&payload.task_id) {
+fn run_sync_command(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    payload: SyncRequest,
+) -> Result<(), String> {
+    start_sync_task(&app, &state, &payload.task_id)
+}
+
+fn start_sync_task(app: &AppHandle, state: &AppState, task_id: &str) -> Result<(), String> {
+    let mut runners = state
+        .runners
+        .lock()
+        .map_err(|_| "runner lock error".to_string())?;
+    if runners.contains_key(task_id) {
         return Ok(());
     }
     let stop_flag = Arc::new(AtomicBool::new(false));
-    let task_id = payload.task_id.clone();
+    let task_id = task_id.to_string();
+    let task_id_for_thread = task_id.clone();
+    let task_id_for_emit = task_id.clone();
     let db_path = state.db_path.clone();
     let api_paths = state.api_paths.clone();
     let stats_map = state.stats.clone();
+    let app_handle = app.clone();
     let stop_for_thread = stop_flag.clone();
     thread::spawn(move || {
-        let settings = match load_task_settings(&db_path, &task_id) {
+        let settings = match load_task_settings(&db_path, &task_id_for_thread) {
             Ok((_, settings)) => settings,
             Err(err) => {
                 let detail = err.to_string();
-                log_error(&db_path, &task_id, &detail);
+                log_error(&db_path, &task_id_for_thread, &detail);
                 return;
             }
         };
@@ -718,33 +789,98 @@ fn run_sync_command(state: tauri::State<AppState>, payload: SyncRequest) -> Resu
                 break;
             }
             let start = Instant::now();
-            match run_sync_once(&db_path, &api_paths, &task_id) {
-                Ok(stats) => update_task_stats(&stats_map, &task_id, stats, start.elapsed()),
+            let progress_task_id = task_id_for_thread.clone();
+            let progress_stats_map = stats_map.clone();
+            let progress_app = app_handle.clone();
+            let progress_started = start;
+            let progress_notifier: Arc<dyn Fn(SyncStats) + Send + Sync> = Arc::new(move |stats| {
+                update_task_stats(
+                    &progress_stats_map,
+                    &progress_task_id,
+                    stats,
+                    progress_started.elapsed(),
+                );
+                emit_task_runtime(
+                    &progress_app,
+                    &progress_stats_map,
+                    &progress_task_id,
+                    "Syncing",
+                    Some(now_ms()),
+                );
+            });
+
+            let status_task_id = task_id_for_thread.clone();
+            let status_stats_map = stats_map.clone();
+            let status_app = app_handle.clone();
+            let status_notifier: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |status| {
+                emit_task_runtime(
+                    &status_app,
+                    &status_stats_map,
+                    &status_task_id,
+                    &status,
+                    Some(now_ms()),
+                );
+            });
+
+            match run_sync_once(
+                &db_path,
+                &api_paths,
+                &task_id_for_thread,
+                Some(progress_notifier),
+                Some(status_notifier),
+            ) {
+                Ok(stats) => {
+                    update_task_stats(&stats_map, &task_id_for_thread, stats, start.elapsed())
+                }
                 Err(err) => {
                     let detail = err.to_string();
-                    log_error(&db_path, &task_id, &detail);
+                    log_error(&db_path, &task_id_for_thread, &detail);
                 }
             }
+            set_zero_rates(&stats_map, &task_id_for_thread);
+            emit_task_runtime(
+                &app_handle,
+                &stats_map,
+                &task_id_for_thread,
+                "Syncing",
+                Some(now_ms()),
+            );
             thread::sleep(Duration::from_secs(interval));
         }
     });
-    runners.insert(payload.task_id, RunnerHandle { stop: stop_flag });
+    runners.insert(task_id, RunnerHandle { stop: stop_flag });
+    emit_task_runtime(&app, &state.stats, &task_id_for_emit, "Syncing", None);
     Ok(())
 }
 
 #[tauri::command]
-fn stop_sync_command(state: tauri::State<AppState>, payload: SyncRequest) -> Result<(), String> {
-    let mut runners = state.runners.lock().map_err(|_| "runner lock error".to_string())?;
+fn stop_sync_command(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    payload: SyncRequest,
+) -> Result<(), String> {
+    let mut runners = state
+        .runners
+        .lock()
+        .map_err(|_| "runner lock error".to_string())?;
     if let Some(handle) = runners.remove(&payload.task_id) {
         handle.stop.store(true, Ordering::SeqCst);
     }
+    set_zero_rates(&state.stats, &payload.task_id);
+    emit_task_runtime(&app, &state.stats, &payload.task_id, "Idle", None);
     Ok(())
 }
 
 #[tauri::command]
-fn delete_task_command(state: tauri::State<AppState>, payload: DeleteTaskRequest) -> Result<(), String> {
+fn delete_task_command(
+    state: tauri::State<AppState>,
+    payload: DeleteTaskRequest,
+) -> Result<(), String> {
     {
-        let mut runners = state.runners.lock().map_err(|_| "runner lock error".to_string())?;
+        let mut runners = state
+            .runners
+            .lock()
+            .map_err(|_| "runner lock error".to_string())?;
         if let Some(handle) = runners.remove(&payload.task_id) {
             handle.stop.store(true, Ordering::SeqCst);
         }
@@ -836,10 +972,23 @@ fn bootstrap(state: tauri::State<AppState>) -> Result<BootstrapPayload, String> 
     })
 }
 
-fn run_sync_once(db_path: &PathBuf, api_paths: &ApiPaths, task_id: &str) -> Result<SyncStats, Box<dyn Error>> {
+fn run_sync_once(
+    db_path: &PathBuf,
+    api_paths: &ApiPaths,
+    task_id: &str,
+    progress_notifier: Option<Arc<dyn Fn(SyncStats) + Send + Sync>>,
+    status_notifier: Option<Arc<dyn Fn(String) + Send + Sync>>,
+) -> Result<SyncStats, Box<dyn Error>> {
     let (task, settings) = load_task_settings(db_path, task_id)?;
     let tokens = load_tokens(&settings.account_key)?;
-    let engine = SyncEngine::new(task, api_paths.clone(), Some(tokens.access_token), db_path.clone());
+    let engine = SyncEngine::new(
+        task,
+        api_paths.clone(),
+        Some(tokens.access_token),
+        db_path.clone(),
+        progress_notifier,
+        status_notifier,
+    );
     tauri::async_runtime::block_on(engine.sync_once())
 }
 
@@ -859,6 +1008,60 @@ fn update_task_stats(
     };
     if let Ok(mut map) = stats_map.lock() {
         map.insert(task_id.to_string(), snapshot);
+    }
+}
+
+fn set_zero_rates(stats_map: &Arc<Mutex<HashMap<String, TaskStats>>>, task_id: &str) {
+    if let Ok(mut map) = stats_map.lock() {
+        map.insert(
+            task_id.to_string(),
+            TaskStats {
+                rate_up: "0 B/s".to_string(),
+                rate_down: "0 B/s".to_string(),
+                queue: 0,
+            },
+        );
+    }
+}
+
+fn emit_task_runtime(
+    app: &AppHandle,
+    stats_map: &Arc<Mutex<HashMap<String, TaskStats>>>,
+    task_id: &str,
+    status: &str,
+    last_sync_ms: Option<i64>,
+) {
+    let stats = stats_map
+        .lock()
+        .ok()
+        .and_then(|map| map.get(task_id).cloned());
+    let stats = stats.unwrap_or(TaskStats {
+        rate_up: "0 B/s".to_string(),
+        rate_down: "0 B/s".to_string(),
+        queue: 0,
+    });
+    let payload = TaskRuntimePayload {
+        task_id: task_id.to_string(),
+        status: status.to_string(),
+        progress_text: progress_text_for_status(status),
+        rate_up: stats.rate_up,
+        rate_down: stats.rate_down,
+        queue: stats.queue,
+        last_sync: last_sync_ms
+            .map(format_time)
+            .unwrap_or_else(|| "--".to_string()),
+    };
+    let _ = app.emit(TASK_RUNTIME_EVENT, payload);
+}
+
+fn progress_text_for_status(status: &str) -> String {
+    match status {
+        "Hashing" => "正在计算本地文件 SHA256...".to_string(),
+        "ListingRemote" => "正在拉取远程目录...".to_string(),
+        "Syncing" => "正在同步文件...".to_string(),
+        "Idle" => "空闲".to_string(),
+        "Error" => "同步异常，请查看日志".to_string(),
+        _ => "处理中...".to_string(),
     }
 }
 
@@ -900,7 +1103,10 @@ fn parse_settings(raw: &str) -> TaskSettings {
     })
 }
 
-fn load_task_settings(db_path: &PathBuf, task_id: &str) -> Result<(TaskRow, TaskSettings), Box<dyn Error>> {
+fn load_task_settings(
+    db_path: &PathBuf,
+    task_id: &str,
+) -> Result<(TaskRow, TaskSettings), Box<dyn Error>> {
     let conn = Connection::open(db_path)?;
     let tasks = list_tasks(&conn)?;
     let task = tasks
@@ -956,7 +1162,11 @@ fn format_rate(bytes_per_sec: f64) -> String {
 }
 
 fn is_running(state: &AppState, task_id: &str) -> bool {
-    state.runners.lock().map(|r| r.contains_key(task_id)).unwrap_or(false)
+    state
+        .runners
+        .lock()
+        .map(|r| r.contains_key(task_id))
+        .unwrap_or(false)
 }
 
 fn build_task_items(state: &AppState, conn: &Connection) -> Result<Vec<TaskItem>, Box<dyn Error>> {
@@ -983,7 +1193,8 @@ fn build_task_items(state: &AppState, conn: &Connection) -> Result<Vec<TaskItem>
             name: settings.name,
             mode: task.mode.clone(),
             local_path: task.local_root.clone(),
-            remote_path: task.remote_root_uri.clone(),
+            remote_path: decode_uri(&task.remote_root_uri),
+            progress_text: progress_text_for_status(&status),
             status,
             rate_up: stats.rate_up,
             rate_down: stats.rate_down,
@@ -1031,8 +1242,15 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn Error>> {
                         if let Ok(tasks) = list_tasks(&conn) {
                             for task in tasks {
                                 let start = Instant::now();
-                                if let Ok(stats) = run_sync_once(&db_path, &api_paths, &task.task_id) {
-                                    update_task_stats(&stats_map, &task.task_id, stats, start.elapsed());
+                                if let Ok(stats) =
+                                    run_sync_once(&db_path, &api_paths, &task.task_id, None, None)
+                                {
+                                    update_task_stats(
+                                        &stats_map,
+                                        &task.task_id,
+                                        stats,
+                                        start.elapsed(),
+                                    );
                                 }
                             }
                         }
@@ -1066,19 +1284,17 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn Error>> {
 fn setup_window_events(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let window_for_event = window.clone();
-        window.on_window_event(move |event| {
-            match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
+        window.on_window_event(move |event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = window_for_event.hide();
+            }
+            WindowEvent::Resized(_) => {
+                if window_for_event.is_minimized().unwrap_or(false) {
                     let _ = window_for_event.hide();
                 }
-                WindowEvent::Resized(_) => {
-                    if window_for_event.is_minimized().unwrap_or(false) {
-                        let _ = window_for_event.hide();
-                    }
-                }
-                _ => {}
             }
+            _ => {}
         });
     }
 }
@@ -1121,10 +1337,7 @@ fn emit_share_requests(app: &AppHandle, paths: Vec<String>) {
     }
     if let Some(window) = app.get_webview_window("main") {
         for path in paths {
-            let _ = window.emit(
-                "share-request",
-                ShareRequestPayload { path },
-            );
+            let _ = window.emit("share-request", ShareRequestPayload { path });
         }
     }
 }
@@ -1138,7 +1351,10 @@ fn install_linux_share_menus() -> Result<(), Box<dyn Error>> {
     let nautilus_dir = data_dir.join("nautilus/scripts");
     fs::create_dir_all(&nautilus_dir)?;
     let nautilus_script = nautilus_dir.join("Cloudreve Sync - Create Share Link");
-    let script_body = format!("#!/bin/sh\n\"{}\" --share \"$@\"\n", exe_path.replace('"', "\\\""));
+    let script_body = format!(
+        "#!/bin/sh\n\"{}\" --share \"$@\"\n",
+        exe_path.replace('"', "\\\"")
+    );
     fs::write(&nautilus_script, script_body)?;
     let mut perms = fs::metadata(&nautilus_script)?.permissions();
     perms.set_mode(0o755);
@@ -1168,10 +1384,8 @@ fn refresh_tokens_once(db_path: &PathBuf) -> Result<(), Box<dyn Error>> {
         if tokens.refresh_token.is_empty() {
             continue;
         }
-        let refreshed = tauri::async_runtime::block_on(refresh_token(
-            &account.base_url,
-            &tokens.refresh_token,
-        ));
+        let refreshed =
+            tauri::async_runtime::block_on(refresh_token(&account.base_url, &tokens.refresh_token));
         let refreshed = match refreshed {
             Ok(value) => value,
             Err(_) => continue,
@@ -1219,6 +1433,15 @@ fn main() {
             }
             emit_share_requests(&handle, collect_share_paths_from_args());
             let state = app.state::<AppState>();
+            if let Ok(conn) = Connection::open(&state.db_path) {
+                if let Ok(tasks) = list_tasks(&conn) {
+                    for task in tasks {
+                        if let Err(err) = start_sync_task(&handle, &state, &task.task_id) {
+                            eprintln!("failed to auto start task {}: {}", task.task_id, err);
+                        }
+                    }
+                }
+            }
             let db_path = state.db_path.clone();
             thread::spawn(move || loop {
                 let _ = refresh_tokens_once(&db_path);

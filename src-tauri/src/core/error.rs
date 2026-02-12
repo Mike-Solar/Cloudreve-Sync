@@ -1,10 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[repr(u32)]
-pub enum CloudreveError{
+pub enum CloudreveError {
     Ok = 0,
     Unknown = 1,
     NotFullySuccessful = 203,
@@ -112,12 +112,12 @@ pub enum CloudreveError{
     FailedToQueryFileMetadata = 50011,
 }
 
-impl Display for CloudreveError{
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result{
+impl Display for CloudreveError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {:?}", *self as u32, self)
     }
 }
-impl Error for CloudreveError{}
+impl Error for CloudreveError {}
 impl CloudreveError {
     /// 将 u32 转换为 CloudreveError 枚举
     pub fn from_u32(value: u32) -> CloudreveError {
@@ -238,13 +238,22 @@ mod tests {
 
     #[test]
     fn from_u32_maps_known_values() {
-        assert!(matches!(CloudreveError::from_u32(404), CloudreveError::ResourceNotFound));
-        assert!(matches!(CloudreveError::from_u32(40001), CloudreveError::ParameterError));
+        assert!(matches!(
+            CloudreveError::from_u32(404),
+            CloudreveError::ResourceNotFound
+        ));
+        assert!(matches!(
+            CloudreveError::from_u32(40001),
+            CloudreveError::ParameterError
+        ));
     }
 
     #[test]
     fn from_u32_defaults_to_unknown() {
-        assert!(matches!(CloudreveError::from_u32(999999), CloudreveError::Unknown));
+        assert!(matches!(
+            CloudreveError::from_u32(999999),
+            CloudreveError::Unknown
+        ));
     }
 
     #[test]

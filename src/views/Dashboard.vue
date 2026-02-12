@@ -24,12 +24,13 @@
             </div>
             <div class="task-meta">
               <el-tag :type="statusTone(task.status)" effect="dark">{{ task.status }}</el-tag>
+              <div class="task-queue">{{ task.progress_text }}</div>
               <div class="task-rate">↑ {{ task.rate_up }} ↓ {{ task.rate_down }}</div>
               <div class="task-queue">队列 {{ task.queue }}</div>
             </div>
             <div class="task-actions">
               <el-button size="small" @click="toggleSync(task)">
-                {{ task.status === "Syncing" ? "暂停" : "同步" }}
+                {{ isRunningStatus(task.status) ? "暂停" : "同步" }}
               </el-button>
               <el-button size="small" type="primary" @click="openTaskFolder(task)">打开目录</el-button>
             </div>
@@ -65,8 +66,9 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRouter } from "vue-router";
-import type { ActivityItem, DashboardCard, TaskItem } from "../services/types";
+import type { ActivityItem, DashboardCard, TaskItem, TaskRuntimePayload } from "../services/types";
 import { fetchBootstrap } from "../services/bootstrap";
 import { openLocalPath, runSync, stopSync } from "../services/api";
 
@@ -74,30 +76,50 @@ const cards = ref<DashboardCard[]>([]);
 const tasks = ref<TaskItem[]>([]);
 const activities = ref<ActivityItem[]>([]);
 const router = useRouter();
+let unlistenTaskRuntime: UnlistenFn | null = null;
+const isRunningStatus = (status: string) => ["Syncing", "Hashing", "ListingRemote"].includes(status);
+
+const applyTaskRuntime = (payload: TaskRuntimePayload) => {
+  const index = tasks.value.findIndex(item => item.id === payload.task_id);
+  if (index >= 0) {
+    const current = tasks.value[index];
+    tasks.value[index] = {
+      ...current,
+      status: payload.status || current.status,
+      progress_text: payload.progress_text || current.progress_text,
+      rate_up: payload.rate_up,
+      rate_down: payload.rate_down,
+      queue: payload.queue,
+      last_sync: payload.last_sync || current.last_sync
+    };
+  }
+  const syncing = tasks.value.some(item => isRunningStatus(item.status));
+  const syncCard = cards.value.find(item => item.label === "同步状态");
+  if (syncCard) {
+    syncCard.value = syncing ? "运行中" : "已暂停";
+    syncCard.tone = syncing ? "success" : "warn";
+  }
+};
 
 onMounted(async () => {
   const data = await fetchBootstrap();
   cards.value = data.cards;
   tasks.value = data.tasks;
   activities.value = data.activities;
-  refreshTimer = window.setInterval(async () => {
-    const latest = await fetchBootstrap();
-    cards.value = latest.cards;
-    tasks.value = latest.tasks;
-    activities.value = latest.activities;
-  }, 1000);
+  unlistenTaskRuntime = await listen<TaskRuntimePayload>("task-runtime", event => {
+    applyTaskRuntime(event.payload);
+  });
 });
 
-let refreshTimer: number | null = null;
-
 onBeforeUnmount(() => {
-  if (refreshTimer) {
-    window.clearInterval(refreshTimer);
+  if (unlistenTaskRuntime) {
+    unlistenTaskRuntime();
+    unlistenTaskRuntime = null;
   }
 });
 
 const statusTone = (status: string) => {
-  if (status === "Syncing") return "success";
+  if (isRunningStatus(status)) return "success";
   if (status === "Error") return "danger";
   if (status === "Paused") return "warning";
   return "info";
@@ -118,7 +140,7 @@ const gotoLogs = () => {
 };
 
 const toggleSync = async (task: TaskItem) => {
-  if (task.status === "Syncing") {
+  if (isRunningStatus(task.status)) {
     await stopSync({ task_id: task.id });
   } else {
     await runSync({ task_id: task.id });

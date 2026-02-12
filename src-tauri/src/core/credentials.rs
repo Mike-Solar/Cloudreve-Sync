@@ -8,7 +8,11 @@ pub struct StoredToken {
     pub refresh_token: String,
 }
 
-pub fn store_tokens(account: &str, access_token: &str, refresh_token: &str) -> Result<(), Box<dyn Error>> {
+pub fn store_tokens(
+    account: &str,
+    access_token: &str,
+    refresh_token: &str,
+) -> Result<(), Box<dyn Error>> {
     let entry = keyring::Entry::new(SERVICE_NAME, account)?;
     let payload = format!("{}\n{}", access_token, refresh_token);
     entry.set_password(&payload)?;

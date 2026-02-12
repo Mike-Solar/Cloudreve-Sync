@@ -4,15 +4,18 @@ use crate::core::db::{
     insert_conflict, insert_tombstone, list_entries_by_task, list_tombstones, now_ms, upsert_entry,
     ConflictRow, EntryRow, TaskRow, TombstoneRow,
 };
+use crate::core::error::CloudreveError;
 use crate::core::logging::{LogEntry, LogLevel, LogStore};
 use chrono::{DateTime, Local, Utc};
 use filetime::FileTime;
+use rayon::prelude::*;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use walkdir::WalkDir;
 
 const META_DEVICE_ID: &str = "customize:sync_device_id";
@@ -49,6 +52,8 @@ pub struct SyncEngine {
     client: CloudreveClient,
     db_path: PathBuf,
     log_store: LogStore,
+    progress_notifier: Option<Arc<dyn Fn(SyncStats) + Send + Sync>>,
+    status_notifier: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -59,7 +64,14 @@ pub struct SyncStats {
 }
 
 impl SyncEngine {
-    pub fn new(task: TaskRow, api_paths: ApiPaths, access_token: Option<String>, db_path: PathBuf) -> Self {
+    pub fn new(
+        task: TaskRow,
+        api_paths: ApiPaths,
+        access_token: Option<String>,
+        db_path: PathBuf,
+        progress_notifier: Option<Arc<dyn Fn(SyncStats) + Send + Sync>>,
+        status_notifier: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    ) -> Self {
         let client = CloudreveClient::new(task.base_url.clone(), access_token, api_paths);
         let log_store = LogStore::new(db_path.clone());
         Self {
@@ -67,6 +79,8 @@ impl SyncEngine {
             client,
             db_path,
             log_store,
+            progress_notifier,
+            status_notifier,
         }
     }
 
@@ -76,8 +90,14 @@ impl SyncEngine {
         let entries = list_entries_by_task(&conn, &self.task.task_id)?;
         let tombstones = list_tombstones(&conn, &self.task.task_id)?;
 
+        self.notify_status("Hashing");
         let local_files = scan_local(&self.task.local_root)?;
-        let remote_files = self.client.list_all_files(&self.task.remote_root_uri).await?;
+        self.notify_status("ListingRemote");
+        let remote_files = self
+            .client
+            .list_all_files(&self.task.remote_root_uri)
+            .await?;
+        self.notify_status("Syncing");
         let local_map = to_local_map(local_files);
         let remote_map = to_remote_map(remote_files, &self.task.remote_root_uri)?;
         let entry_map = entries
@@ -97,87 +117,119 @@ impl SyncEngine {
         all_paths.dedup();
 
         for relpath in all_paths {
+            let relpath_for_log = relpath.clone();
             let local = local_map.get(&relpath);
             let remote = remote_map.get(&relpath);
             let entry = entry_map.get(&relpath);
             let tombstone = tombstone_map.get(&relpath);
-
-            if let Some(remote) = remote {
-                if remote.deleted_at_ms.is_some() {
-                    if let Some(local) = local {
-                        remove_local_file(local)?;
-                        self.log_db(&mut conn, LogLevel::Warn, "delete", &format!(
-                            "本地删除: {} (远端标记删除)",
-                            local.relpath
-                        ))?;
+            let result: Result<(), Box<dyn Error>> = async {
+                if let Some(remote) = remote {
+                    if remote.deleted_at_ms.is_some() {
+                        if let Some(local) = local {
+                            remove_local_file(local)?;
+                            self.log_db(
+                                &mut conn,
+                                LogLevel::Warn,
+                                "delete",
+                                &format!("本地删除: {} (远端标记删除)", local.relpath),
+                            )?;
+                        }
+                        if tombstone.is_none() {
+                            insert_tombstone(
+                                &conn,
+                                &TombstoneRow {
+                                    task_id: self.task.task_id.clone(),
+                                    cloud_file_id: remote.file_id.clone(),
+                                    local_relpath: relpath.clone(),
+                                    deleted_at_ms: remote.deleted_at_ms.unwrap_or_else(now_ms),
+                                    origin: "remote".to_string(),
+                                },
+                            )?;
+                        }
+                        return Ok(());
                     }
-                    if tombstone.is_none() {
+                }
+
+                if local.is_none() && entry.is_some() && tombstone.is_none() {
+                    if let Some(remote) = remote {
+                        let deleted_at = now_ms();
+                        self.set_remote_deleted(&remote.uri, deleted_at).await?;
                         insert_tombstone(
                             &conn,
                             &TombstoneRow {
                                 task_id: self.task.task_id.clone(),
                                 cloud_file_id: remote.file_id.clone(),
                                 local_relpath: relpath.clone(),
-                                deleted_at_ms: remote.deleted_at_ms.unwrap_or_else(now_ms),
-                                origin: "remote".to_string(),
+                                deleted_at_ms: deleted_at,
+                                origin: "local".to_string(),
                             },
                         )?;
+                        self.log_db(
+                            &mut conn,
+                            LogLevel::Warn,
+                            "delete",
+                            &format!("远端标记删除: {}", relpath),
+                        )?;
                     }
-                    continue;
+                    return Ok(());
                 }
+
+                match (local, remote) {
+                    (Some(local), Some(remote)) => {
+                        let local_changed = entry
+                            .map(|e| {
+                                e.last_local_sha256 != local.sha256
+                                    || e.last_local_mtime_ms != local.mtime_ms
+                            })
+                            .unwrap_or(true);
+                        let remote_changed = entry
+                            .map(|e| {
+                                e.last_remote_sha256 != remote.sha256
+                                    || e.last_remote_mtime_ms != remote.mtime_ms
+                            })
+                            .unwrap_or(true);
+
+                        if entry.is_some()
+                            && local_changed
+                            && remote_changed
+                            && local.sha256 != remote.sha256
+                        {
+                            self.handle_conflict(&mut conn, local, remote).await?;
+                            return Ok(());
+                        }
+
+                        let prefer_local = local_changed
+                            && (!remote_changed
+                                || entry.is_none()
+                                || local.mtime_ms >= remote.mtime_ms);
+                        if prefer_local {
+                            self.upload_local(&mut conn, local, remote, &mut stats)
+                                .await?;
+                        } else if remote_changed {
+                            self.download_remote(&mut conn, local, remote, &mut stats)
+                                .await?;
+                        }
+                    }
+                    (Some(local), None) => {
+                        self.upload_new_local(&mut conn, local, &mut stats).await?;
+                    }
+                    (None, Some(remote)) => {
+                        self.download_new_remote(&mut conn, remote, &mut stats)
+                            .await?;
+                    }
+                    (None, None) => {}
+                }
+                Ok(())
             }
+            .await;
 
-            if local.is_none() && entry.is_some() && tombstone.is_none() {
-                if let Some(remote) = remote {
-                    let deleted_at = now_ms();
-                    self.set_remote_deleted(&remote.uri, deleted_at).await?;
-                    insert_tombstone(
-                        &conn,
-                        &TombstoneRow {
-                            task_id: self.task.task_id.clone(),
-                            cloud_file_id: remote.file_id.clone(),
-                            local_relpath: relpath.clone(),
-                            deleted_at_ms: deleted_at,
-                            origin: "local".to_string(),
-                        },
-                    )?;
-                    self.log_db(&mut conn, LogLevel::Warn, "delete", &format!(
-                        "远端标记删除: {}", relpath
-                    ))?;
-                }
-                continue;
-            }
-
-            match (local, remote) {
-                (Some(local), Some(remote)) => {
-                    let local_changed = entry
-                        .map(|e| e.last_local_sha256 != local.sha256 || e.last_local_mtime_ms != local.mtime_ms)
-                        .unwrap_or(true);
-                    let remote_changed = entry
-                        .map(|e| e.last_remote_sha256 != remote.sha256 || e.last_remote_mtime_ms != remote.mtime_ms)
-                        .unwrap_or(true);
-
-                    if entry.is_some() && local_changed && remote_changed && local.sha256 != remote.sha256 {
-                        self.handle_conflict(&mut conn, local, remote).await?;
-                        continue;
-                    }
-
-                    let prefer_local =
-                        local_changed
-                            && (!remote_changed || entry.is_none() || local.mtime_ms >= remote.mtime_ms);
-                    if prefer_local {
-                        self.upload_local(&mut conn, local, remote, &mut stats).await?;
-                    } else if remote_changed {
-                        self.download_remote(&mut conn, local, remote, &mut stats).await?;
-                    }
-                }
-                (Some(local), None) => {
-                    self.upload_new_local(&mut conn, local, &mut stats).await?;
-                }
-                (None, Some(remote)) => {
-                    self.download_new_remote(&mut conn, remote, &mut stats).await?;
-                }
-                (None, None) => {}
+            if let Err(err) = result {
+                self.log_db(
+                    &mut conn,
+                    LogLevel::Error,
+                    "sync",
+                    &format!("文件同步失败: {} ({})", relpath_for_log, err),
+                )?;
             }
         }
 
@@ -192,26 +244,30 @@ impl SyncEngine {
     ) -> Result<(), Box<dyn Error>> {
         let uri = build_remote_uri(&self.task.remote_root_uri, &local.relpath);
         let content = fs::read(&local.abs_path)?;
-        self.client
-            .update_file_content(&uri, &content)
-            .await
-            .map_err(|err| format!("上传失败: {} ({})", local.relpath, err))?;
+        self.upload_content(&uri, &content, &local.relpath, Some(stats))
+            .await?;
         self.patch_sync_metadata(&uri, local, None).await?;
-        upsert_entry(conn, &EntryRow {
-            task_id: self.task.task_id.clone(),
-            local_relpath: local.relpath.clone(),
-            cloud_file_id: "".to_string(),
-            cloud_uri: uri.clone(),
-            last_local_mtime_ms: local.mtime_ms,
-            last_local_sha256: local.sha256.clone(),
-            last_remote_mtime_ms: local.mtime_ms,
-            last_remote_sha256: local.sha256.clone(),
-            last_sync_ts_ms: now_ms(),
-            state: "ok".to_string(),
-        })?;
-        self.log_db(conn, LogLevel::Info, "upload", &format!("上传新文件: {}", local.relpath))?;
-        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(content.len() as u64);
-        stats.operations = stats.operations.saturating_add(1);
+        upsert_entry(
+            conn,
+            &EntryRow {
+                task_id: self.task.task_id.clone(),
+                local_relpath: local.relpath.clone(),
+                cloud_file_id: "".to_string(),
+                cloud_uri: uri.clone(),
+                last_local_mtime_ms: local.mtime_ms,
+                last_local_sha256: local.sha256.clone(),
+                last_remote_mtime_ms: local.mtime_ms,
+                last_remote_sha256: local.sha256.clone(),
+                last_sync_ts_ms: now_ms(),
+                state: "ok".to_string(),
+            },
+        )?;
+        self.log_db(
+            conn,
+            LogLevel::Info,
+            "upload",
+            &format!("上传新文件: {}", local.relpath),
+        )?;
         Ok(())
     }
 
@@ -223,26 +279,31 @@ impl SyncEngine {
         stats: &mut SyncStats,
     ) -> Result<(), Box<dyn Error>> {
         let content = fs::read(&local.abs_path)?;
-        self.client
-            .update_file_content(&remote.uri, &content)
-            .await
-            .map_err(|err| format!("上传失败: {} ({})", local.relpath, err))?;
-        self.patch_sync_metadata(&remote.uri, local, Some(remote)).await?;
-        upsert_entry(conn, &EntryRow {
-            task_id: self.task.task_id.clone(),
-            local_relpath: local.relpath.clone(),
-            cloud_file_id: remote.file_id.clone(),
-            cloud_uri: remote.uri.clone(),
-            last_local_mtime_ms: local.mtime_ms,
-            last_local_sha256: local.sha256.clone(),
-            last_remote_mtime_ms: local.mtime_ms,
-            last_remote_sha256: local.sha256.clone(),
-            last_sync_ts_ms: now_ms(),
-            state: "ok".to_string(),
-        })?;
-        self.log_db(conn, LogLevel::Info, "upload", &format!("上传更新: {}", local.relpath))?;
-        stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(content.len() as u64);
-        stats.operations = stats.operations.saturating_add(1);
+        self.upload_content(&remote.uri, &content, &local.relpath, Some(stats))
+            .await?;
+        self.patch_sync_metadata(&remote.uri, local, Some(remote))
+            .await?;
+        upsert_entry(
+            conn,
+            &EntryRow {
+                task_id: self.task.task_id.clone(),
+                local_relpath: local.relpath.clone(),
+                cloud_file_id: remote.file_id.clone(),
+                cloud_uri: remote.uri.clone(),
+                last_local_mtime_ms: local.mtime_ms,
+                last_local_sha256: local.sha256.clone(),
+                last_remote_mtime_ms: local.mtime_ms,
+                last_remote_sha256: local.sha256.clone(),
+                last_sync_ts_ms: now_ms(),
+                state: "ok".to_string(),
+            },
+        )?;
+        self.log_db(
+            conn,
+            LogLevel::Info,
+            "upload",
+            &format!("上传更新: {}", local.relpath),
+        )?;
         Ok(())
     }
 
@@ -263,21 +324,30 @@ impl SyncEngine {
             .map_err(|err| format!("下载失败: {} ({})", remote.relpath, err))?;
         fs::write(&target, &bytes)?;
         set_local_mtime(&target, remote.mtime_ms)?;
-        upsert_entry(conn, &EntryRow {
-            task_id: self.task.task_id.clone(),
-            local_relpath: remote.relpath.clone(),
-            cloud_file_id: remote.file_id.clone(),
-            cloud_uri: remote.uri.clone(),
-            last_local_mtime_ms: remote.mtime_ms,
-            last_local_sha256: remote.sha256.clone(),
-            last_remote_mtime_ms: remote.mtime_ms,
-            last_remote_sha256: remote.sha256.clone(),
-            last_sync_ts_ms: now_ms(),
-            state: "ok".to_string(),
-        })?;
-        self.log_db(conn, LogLevel::Info, "download", &format!("下载新文件: {}", remote.relpath))?;
+        upsert_entry(
+            conn,
+            &EntryRow {
+                task_id: self.task.task_id.clone(),
+                local_relpath: remote.relpath.clone(),
+                cloud_file_id: remote.file_id.clone(),
+                cloud_uri: remote.uri.clone(),
+                last_local_mtime_ms: remote.mtime_ms,
+                last_local_sha256: remote.sha256.clone(),
+                last_remote_mtime_ms: remote.mtime_ms,
+                last_remote_sha256: remote.sha256.clone(),
+                last_sync_ts_ms: now_ms(),
+                state: "ok".to_string(),
+            },
+        )?;
+        self.log_db(
+            conn,
+            LogLevel::Info,
+            "download",
+            &format!("下载新文件: {}", remote.relpath),
+        )?;
         stats.downloaded_bytes = stats.downloaded_bytes.saturating_add(bytes.len() as u64);
         stats.operations = stats.operations.saturating_add(1);
+        self.notify_progress(stats);
         Ok(())
     }
 
@@ -295,21 +365,30 @@ impl SyncEngine {
             .map_err(|err| format!("下载失败: {} ({})", local.relpath, err))?;
         fs::write(&local.abs_path, &bytes)?;
         set_local_mtime(&local.abs_path, remote.mtime_ms)?;
-        upsert_entry(conn, &EntryRow {
-            task_id: self.task.task_id.clone(),
-            local_relpath: local.relpath.clone(),
-            cloud_file_id: remote.file_id.clone(),
-            cloud_uri: remote.uri.clone(),
-            last_local_mtime_ms: remote.mtime_ms,
-            last_local_sha256: remote.sha256.clone(),
-            last_remote_mtime_ms: remote.mtime_ms,
-            last_remote_sha256: remote.sha256.clone(),
-            last_sync_ts_ms: now_ms(),
-            state: "ok".to_string(),
-        })?;
-        self.log_db(conn, LogLevel::Info, "download", &format!("下载更新: {}", local.relpath))?;
+        upsert_entry(
+            conn,
+            &EntryRow {
+                task_id: self.task.task_id.clone(),
+                local_relpath: local.relpath.clone(),
+                cloud_file_id: remote.file_id.clone(),
+                cloud_uri: remote.uri.clone(),
+                last_local_mtime_ms: remote.mtime_ms,
+                last_local_sha256: remote.sha256.clone(),
+                last_remote_mtime_ms: remote.mtime_ms,
+                last_remote_sha256: remote.sha256.clone(),
+                last_sync_ts_ms: now_ms(),
+                state: "ok".to_string(),
+            },
+        )?;
+        self.log_db(
+            conn,
+            LogLevel::Info,
+            "download",
+            &format!("下载更新: {}", local.relpath),
+        )?;
         stats.downloaded_bytes = stats.downloaded_bytes.saturating_add(bytes.len() as u64);
         stats.operations = stats.operations.saturating_add(1);
+        self.notify_progress(stats);
         Ok(())
     }
 
@@ -337,34 +416,49 @@ impl SyncEngine {
         fs::copy(&local.abs_path, &conflict_abs)?;
 
         let conflict_uri = build_remote_uri(&self.task.remote_root_uri, &conflict_relpath);
-        self.client
-            .update_file_content(&conflict_uri, &fs::read(&conflict_abs)?)
-            .await
-            .map_err(|err| format!("上传失败: {} ({})", conflict_relpath, err))?;
-        self.patch_conflict_metadata(&conflict_uri, local, remote).await?;
+        self.upload_content(
+            &conflict_uri,
+            &fs::read(&conflict_abs)?,
+            &conflict_relpath,
+            None,
+        )
+        .await?;
+        self.patch_conflict_metadata(&conflict_uri, local, remote)
+            .await?;
 
-        insert_conflict(conn, &ConflictRow {
-            task_id: self.task.task_id.clone(),
-            original_relpath: local.relpath.clone(),
-            conflict_relpath: conflict_relpath.clone(),
-            created_at_ms: now_ms(),
-            reason: "both_modified".to_string(),
-        })?;
+        insert_conflict(
+            conn,
+            &ConflictRow {
+                task_id: self.task.task_id.clone(),
+                original_relpath: local.relpath.clone(),
+                conflict_relpath: conflict_relpath.clone(),
+                created_at_ms: now_ms(),
+                reason: "both_modified".to_string(),
+            },
+        )?;
 
-        self.log_db(conn, LogLevel::Warn, "conflict", &format!(
-            "冲突生成: {} -> {}",
-            local.relpath, conflict_relpath
-        ))?;
+        self.log_db(
+            conn,
+            LogLevel::Warn,
+            "conflict",
+            &format!("冲突生成: {} -> {}", local.relpath, conflict_relpath),
+        )?;
         Ok(())
     }
 
-    async fn set_remote_deleted(&self, uri: &str, deleted_at_ms: i64) -> Result<(), Box<dyn Error>> {
+    async fn set_remote_deleted(
+        &self,
+        uri: &str,
+        deleted_at_ms: i64,
+    ) -> Result<(), Box<dyn Error>> {
         let patches = vec![MetadataPatch {
             key: META_DELETED_AT.to_string(),
             value: Some(deleted_at_ms.to_string()),
             remove: Some(false),
         }];
-        self.client.patch_metadata(vec![uri.to_string()], patches).await
+        self.client
+            .patch_metadata(vec![uri.to_string()], patches)
+            .await
     }
 
     async fn patch_sync_metadata(
@@ -397,7 +491,9 @@ impl SyncEngine {
                 remove: Some(true),
             });
         }
-        self.client.patch_metadata(vec![uri.to_string()], patches).await
+        self.client
+            .patch_metadata(vec![uri.to_string()], patches)
+            .await
     }
 
     async fn patch_conflict_metadata(
@@ -433,7 +529,9 @@ impl SyncEngine {
                 remove: Some(false),
             },
         ];
-        self.client.patch_metadata(vec![uri.to_string()], patches).await
+        self.client
+            .patch_metadata(vec![uri.to_string()], patches)
+            .await
     }
 
     fn log_db(
@@ -447,10 +545,112 @@ impl SyncEngine {
         self.log_store.append(conn, &entry)?;
         Ok(())
     }
+
+    fn notify_progress(&self, stats: &SyncStats) {
+        if let Some(notifier) = &self.progress_notifier {
+            notifier(stats.clone());
+        }
+    }
+
+    fn notify_status(&self, status: &str) {
+        if let Some(notifier) = &self.status_notifier {
+            notifier(status.to_string());
+        }
+    }
+
+    async fn upload_content(
+        &self,
+        uri: &str,
+        content: &[u8],
+        relpath: &str,
+        stats: Option<&mut SyncStats>,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut stats = stats;
+        match self.client.update_file_content(uri, content).await {
+            Ok(()) => {
+                if let Some(stats) = stats.as_deref_mut() {
+                    stats.uploaded_bytes =
+                        stats.uploaded_bytes.saturating_add(content.len() as u64);
+                    stats.operations = stats.operations.saturating_add(1);
+                    self.notify_progress(stats);
+                }
+                Ok(())
+            }
+            Err(err) => {
+                if is_file_too_large(&*err) {
+                    self.upload_with_session(uri, content, stats.as_deref_mut())
+                        .await
+                        .map(|()| {
+                            if let Some(stats) = stats.as_deref_mut() {
+                                stats.operations = stats.operations.saturating_add(1);
+                                self.notify_progress(stats);
+                            }
+                        })
+                        .map_err(|upload_err| {
+                            if is_file_too_large(&*upload_err) {
+                                format!(
+                                    "上传失败: {} (存储策略限制，文件过大: {})",
+                                    relpath, upload_err
+                                )
+                                .into()
+                            } else {
+                                format!("上传失败: {} (分片上传失败: {})", relpath, upload_err)
+                                    .into()
+                            }
+                        })
+                } else {
+                    Err(format!("上传失败: {} ({})", relpath, err).into())
+                }
+            }
+        }
+    }
+
+    async fn upload_with_session(
+        &self,
+        uri: &str,
+        content: &[u8],
+        stats: Option<&mut SyncStats>,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut stats = stats;
+        let session = self
+            .client
+            .create_upload_session(uri, content.len() as u64, None, None, None)
+            .await?;
+        let chunk_size = if session.chunk_size > 0 {
+            session.chunk_size as usize
+        } else {
+            content.len().max(1)
+        };
+
+        let mut index = 0u64;
+        let mut offset = 0usize;
+        while offset < content.len() {
+            let end = (offset + chunk_size).min(content.len());
+            let chunk = &content[offset..end];
+            self.client
+                .upload_chunk(&session.session_id, index, chunk)
+                .await?;
+            if let Some(stats) = stats.as_deref_mut() {
+                stats.uploaded_bytes = stats.uploaded_bytes.saturating_add(chunk.len() as u64);
+                self.notify_progress(stats);
+            }
+            offset = end;
+            index += 1;
+        }
+        Ok(())
+    }
 }
 
 fn scan_local(root: &str) -> Result<Vec<LocalFileInfo>, Box<dyn Error>> {
-    let mut out = Vec::new();
+    #[derive(Debug, Clone)]
+    struct LocalFileSeed {
+        relpath: String,
+        abs_path: PathBuf,
+        size: u64,
+        mtime_ms: i64,
+    }
+
+    let mut seeds = Vec::new();
     for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file() {
             continue;
@@ -467,14 +667,31 @@ fn scan_local(root: &str) -> Result<Vec<LocalFileInfo>, Box<dyn Error>> {
             .to_string_lossy()
             .trim_start_matches(std::path::MAIN_SEPARATOR)
             .replace(std::path::MAIN_SEPARATOR, "/");
-        let sha256 = hash_file(&abs_path)?;
-        out.push(LocalFileInfo {
+        seeds.push(LocalFileSeed {
             relpath,
             abs_path,
             size: metadata.len(),
             mtime_ms,
-            sha256,
         });
+    }
+    let hashed = seeds
+        .into_par_iter()
+        .map(|item| {
+            hash_file(&item.abs_path)
+                .map(|sha256| LocalFileInfo {
+                    relpath: item.relpath,
+                    abs_path: item.abs_path,
+                    size: item.size,
+                    mtime_ms: item.mtime_ms,
+                    sha256,
+                })
+                .map_err(|err| err.to_string())
+        })
+        .collect::<Vec<_>>();
+    let mut out = Vec::with_capacity(hashed.len());
+    for result in hashed {
+        let file = result.map_err(|err| -> Box<dyn Error> { err.into() })?;
+        out.push(file);
     }
     Ok(out)
 }
@@ -545,17 +762,15 @@ fn uri_path(uri: &str) -> String {
     } else {
         cleaned
     };
-    urlencoding::decode(path).unwrap_or_else(|_| path.into()).to_string()
+    urlencoding::decode(path)
+        .unwrap_or_else(|_| path.into())
+        .to_string()
 }
 
 fn build_remote_uri(root_uri: &str, relpath: &str) -> String {
     let root = root_uri.trim_end_matches('/');
-    let encoded = relpath
-        .split('/')
-        .map(|part| urlencoding::encode(part).to_string())
-        .collect::<Vec<_>>()
-        .join("/");
-    format!("{}/{}", root, encoded)
+    let rel = relpath.trim_start_matches('/');
+    format!("{}/{}", root, rel)
 }
 
 fn hash_file(path: &Path) -> Result<String, Box<dyn Error>> {
@@ -594,7 +809,10 @@ fn remove_local_file(local: &LocalFileInfo) -> Result<(), Box<dyn Error>> {
 }
 
 fn file_extension(path: &str) -> Option<String> {
-    Path::new(path).extension().and_then(|ext| ext.to_str()).map(|s| s.to_string())
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|s| s.to_string())
 }
 
 fn file_stem(path: &str) -> String {
@@ -603,6 +821,13 @@ fn file_stem(path: &str) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or(path)
         .to_string()
+}
+
+fn is_file_too_large(err: &(dyn Error + 'static)) -> bool {
+    if let Some(value) = err.downcast_ref::<CloudreveError>() {
+        return matches!(value, CloudreveError::FileTooLarge);
+    }
+    err.to_string().contains("40049")
 }
 
 #[cfg(test)]
@@ -621,10 +846,10 @@ mod tests {
     }
 
     #[test]
-    fn build_remote_uri_encodes_segments() {
+    fn build_remote_uri_keeps_plain_segments() {
         let root = "cloudreve://root/Work";
         let result = build_remote_uri(root, "a b/c.txt");
-        assert_eq!(result, "cloudreve://root/Work/a%20b/c.txt");
+        assert_eq!(result, "cloudreve://root/Work/a b/c.txt");
     }
 
     #[test]

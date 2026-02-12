@@ -1,7 +1,7 @@
 use chrono::Utc;
-use serde::Serialize;
-use rusqlite::{params, params_from_iter, Connection, Result};
 use rusqlite::types::Value;
+use rusqlite::{params, params_from_iter, Connection, Result};
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct TaskRow {
@@ -208,7 +208,10 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<TaskRow>> {
 
 pub fn delete_task(conn: &Connection, task_id: &str) -> Result<()> {
     conn.execute("DELETE FROM entries WHERE task_id = ?1", params![task_id])?;
-    conn.execute("DELETE FROM tombstones WHERE task_id = ?1", params![task_id])?;
+    conn.execute(
+        "DELETE FROM tombstones WHERE task_id = ?1",
+        params![task_id],
+    )?;
     conn.execute("DELETE FROM conflicts WHERE task_id = ?1", params![task_id])?;
     conn.execute("DELETE FROM logs WHERE task_id = ?1", params![task_id])?;
     conn.execute("DELETE FROM tasks WHERE task_id = ?1", params![task_id])?;
@@ -376,7 +379,14 @@ pub fn list_logs(
         params_vec.push(task_id.unwrap().to_string().into());
     }
     if level.is_some() {
-        filters.push(if task_id.is_some() { "level = ?2" } else { "level = ?1" }.to_string());
+        filters.push(
+            if task_id.is_some() {
+                "level = ?2"
+            } else {
+                "level = ?1"
+            }
+            .to_string(),
+        );
         params_vec.push(level.unwrap().to_string().into());
     }
     if !filters.is_empty() {
@@ -421,7 +431,14 @@ pub fn count_logs(conn: &Connection, task_id: Option<&str>, level: Option<&str>)
         params_vec.push(task_id.unwrap().to_string().into());
     }
     if level.is_some() {
-        filters.push(if task_id.is_some() { "level = ?2" } else { "level = ?1" }.to_string());
+        filters.push(
+            if task_id.is_some() {
+                "level = ?2"
+            } else {
+                "level = ?1"
+            }
+            .to_string(),
+        );
         params_vec.push(level.unwrap().to_string().into());
     }
     if !filters.is_empty() {
