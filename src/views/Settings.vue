@@ -2,48 +2,48 @@
   <section class="settings-view">
     <div class="settings-grid">
       <el-card class="panel">
-        <div class="panel-title">通用</div>
-        <el-switch v-model="autostart" active-text="开机自启动" />
-        <el-switch v-model="tray" active-text="托盘图标" />
-        <el-select v-model="language" placeholder="语言">
-          <el-option label="简体中文" value="zh" />
-          <el-option label="English" value="en" />
+        <div class="panel-title">{{ t("settings.general") }}</div>
+        <el-switch v-model="autostart" :active-text="t('settings.autostart')" />
+        <el-switch v-model="tray" :active-text="t('settings.tray')" />
+        <el-select v-model="language" :placeholder="t('settings.language')">
+          <el-option :label="t('settings.languageZh')" value="zh" />
+          <el-option :label="t('settings.languageEn')" value="en" />
         </el-select>
       </el-card>
       <el-card class="panel">
-        <div class="panel-title">网络</div>
-        <el-input v-model="proxy" placeholder="代理地址" />
-        <el-input-number v-model="retries" :min="0" placeholder="最大重试次数" />
-        <el-select v-model="backoff" placeholder="退避策略">
-          <el-option label="指数退避" value="指数退避" />
-          <el-option label="线性退避" value="线性退避" />
-          <el-option label="固定间隔" value="固定间隔" />
+        <div class="panel-title">{{ t("settings.network") }}</div>
+        <el-input v-model="proxy" :placeholder="t('settings.proxyPlaceholder')" />
+        <el-input-number v-model="retries" :min="0" :placeholder="t('settings.retriesPlaceholder')" />
+        <el-select v-model="backoff" :placeholder="t('settings.backoffPlaceholder')">
+          <el-option :label="t('settings.backoffExponential')" value="指数退避" />
+          <el-option :label="t('settings.backoffLinear')" value="线性退避" />
+          <el-option :label="t('settings.backoffFixed')" value="固定间隔" />
         </el-select>
       </el-card>
       <el-card class="panel">
-        <div class="panel-title">性能</div>
+        <div class="panel-title">{{ t("settings.performance") }}</div>
         <div class="field-row">
-          <span class="field-label">上传并发</span>
+          <span class="field-label">{{ t("settings.uploadConcurrency") }}</span>
           <el-input-number v-model="upload" :min="1" />
         </div>
         <div class="field-row">
-          <span class="field-label">下载并发</span>
+          <span class="field-label">{{ t("settings.downloadConcurrency") }}</span>
           <el-input-number v-model="download" :min="1" />
         </div>
         <div class="field-row">
-          <span class="field-label">SHA256 线程数</span>
+          <span class="field-label">{{ t("settings.shaThreads") }}</span>
           <el-input-number v-model="shaThreads" :min="1" />
         </div>
       </el-card>
       <el-card class="panel">
-        <div class="panel-title">安全</div>
-        <el-button type="danger" plain @click="clearAllCredentials">清除登录凭据</el-button>
-        <el-switch v-model="lockPause" active-text="锁屏后暂停同步" />
+        <div class="panel-title">{{ t("settings.security") }}</div>
+        <el-button type="danger" plain @click="clearAllCredentials">{{ t("settings.clearCredentials") }}</el-button>
+        <el-switch v-model="lockPause" :active-text="t('settings.lockPause')" />
       </el-card>
       <el-card class="panel">
-        <div class="panel-title">高级</div>
-        <el-switch v-model="debug" active-text="调试模式" />
-        <el-switch v-model="trace" active-text="API Trace" />
+        <div class="panel-title">{{ t("settings.advanced") }}</div>
+        <el-switch v-model="debug" :active-text="t('settings.debug')" />
+        <el-switch v-model="trace" :active-text="t('settings.trace')" />
       </el-card>
     </div>
   </section>
@@ -52,7 +52,11 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
+import { useI18n } from "vue-i18n";
 import { clearCredentials, getSettings, saveSettings } from "../services/api";
+import { applyLocale } from "../i18n";
+
+const { t } = useI18n();
 
 const autostart = ref(true);
 const tray = ref(true);
@@ -90,14 +94,19 @@ const scheduleSave = () => {
     window.clearTimeout(saveTimer);
   }
   saveTimer = window.setTimeout(async () => {
-    await saveSettings(buildPayload());
-    ElMessage.success("设置已保存");
+    try {
+      await saveSettings(buildPayload());
+      ElMessage.success(t("settings.saved"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ElMessage.error(t("common.saveFailed", { msg: message }));
+    }
   }, 500);
 };
 
 const clearAllCredentials = async () => {
   await clearCredentials();
-  ElMessage.success("登录凭据已清除");
+  ElMessage.success(t("settings.cleared"));
 };
 
 onMounted(async () => {
@@ -114,7 +123,12 @@ onMounted(async () => {
   lockPause.value = settings.lock_pause;
   debug.value = settings.debug;
   trace.value = settings.trace;
+  applyLocale(settings.language);
   loaded = true;
+});
+
+watch(language, value => {
+  applyLocale(value);
 });
 
 watch(

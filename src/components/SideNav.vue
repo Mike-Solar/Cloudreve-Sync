@@ -4,7 +4,7 @@
       <div class="brand-mark">CR</div>
       <div class="brand-text">
         <div class="brand-title">Cloudreve Sync</div>
-        <div class="brand-subtitle">双向同步控制台</div>
+        <div class="brand-subtitle">{{ t("nav.subtitle") }}</div>
       </div>
     </div>
     <nav class="nav-list">
@@ -14,13 +14,15 @@
       </RouterLink>
     </nav>
     <div class="nav-footer">
-      <div class="hint">不会覆盖文件 · 冲突双保留</div>
+      <div class="hint">{{ t("nav.hint") }}</div>
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
 import { RouterLink } from "vue-router";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   DataLine,
   FolderOpened,
@@ -30,12 +32,13 @@ import {
   InfoFilled
 } from "@element-plus/icons-vue";
 
-const items = [
-  { label: "概览", path: "/", icon: DataLine },
-  { label: "同步任务", path: "/tasks", icon: FolderOpened },
-  { label: "冲突中心", path: "/conflicts", icon: WarningFilled },
-  { label: "活动日志", path: "/logs", icon: Document },
-  { label: "设置", path: "/settings", icon: Setting },
-  { label: "关于", path: "/about", icon: InfoFilled }
-];
+const { t } = useI18n();
+const items = computed(() => [
+  { label: t("nav.dashboard"), path: "/", icon: DataLine },
+  { label: t("nav.tasks"), path: "/tasks", icon: FolderOpened },
+  { label: t("nav.conflicts"), path: "/conflicts", icon: WarningFilled },
+  { label: t("nav.logs"), path: "/logs", icon: Document },
+  { label: t("nav.settings"), path: "/settings", icon: Setting },
+  { label: t("nav.about"), path: "/about", icon: InfoFilled }
+]);
 </script>

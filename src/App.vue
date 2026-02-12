@@ -14,26 +14,26 @@
 
     <el-dialog
       v-model="shareDialogVisible"
-      title="创建分享链接"
+      :title="t('share.title')"
       width="520px"
       @close="handleShareDialogClose"
     >
       <div class="share-form">
         <div class="share-path">
-          <div class="share-label">本地路径</div>
+          <div class="share-label">{{ t("share.localPath") }}</div>
           <div class="share-value">{{ shareForm.localPath }}</div>
         </div>
         <el-form :model="shareForm" label-width="88px">
-          <el-form-item label="提取密码">
+          <el-form-item :label="t('share.password')">
             <el-input
               v-model="shareForm.password"
-              placeholder="留空表示无密码"
+              :placeholder="t('share.passwordPlaceholder')"
               maxlength="32"
               show-word-limit
             />
           </el-form-item>
-          <el-form-item label="有效期">
-            <el-select v-model="shareForm.expire" placeholder="请选择">
+          <el-form-item :label="t('share.expire')">
+            <el-select v-model="shareForm.expire" :placeholder="t('share.selectPlaceholder')">
               <el-option
                 v-for="option in expireOptions"
                 :key="option.value"
@@ -44,19 +44,19 @@
           </el-form-item>
         </el-form>
         <div v-if="shareForm.shareLink" class="share-result">
-          <div class="share-label">分享链接</div>
+          <div class="share-label">{{ t("share.link") }}</div>
           <div class="share-link-row">
             <el-input v-model="shareForm.shareLink" readonly />
-            <el-button @click="copyShareLink">复制</el-button>
-            <el-button type="primary" @click="openShareLink">打开</el-button>
+            <el-button @click="copyShareLink">{{ t("share.copy") }}</el-button>
+            <el-button type="primary" @click="openShareLink">{{ t("share.open") }}</el-button>
           </div>
         </div>
         <div v-if="shareForm.error" class="share-error">{{ shareForm.error }}</div>
       </div>
       <template #footer>
-        <el-button @click="shareDialogVisible = false">关闭</el-button>
+        <el-button @click="shareDialogVisible = false">{{ t("share.close") }}</el-button>
         <el-button type="primary" :loading="shareForm.loading" @click="submitShareLink">
-          生成
+          {{ t("share.generate") }}
         </el-button>
       </template>
     </el-dialog>
@@ -68,16 +68,19 @@ import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { listen } from "@tauri-apps/api/event";
 import { ElMessage } from "element-plus";
+import { useI18n } from "vue-i18n";
 import SideNav from "./components/SideNav.vue";
 import TopBar from "./components/TopBar.vue";
 import { createShareLink, openExternal } from "./services/api";
 
 const route = useRoute();
+const { t } = useI18n();
 
 const pageMeta = computed(() => {
+  const routeName = String(route.name || "dashboard");
   return {
-    title: (route.meta.title as string) || "概览",
-    subtitle: (route.meta.subtitle as string) || "同步状态与活动总览"
+    title: t(`route.${routeName}.title`),
+    subtitle: t(`route.${routeName}.subtitle`)
   };
 });
 
@@ -87,12 +90,12 @@ type ShareQueueItem = {
 
 const shareDialogVisible = ref(false);
 const shareQueue = ref<ShareQueueItem[]>([]);
-const expireOptions = [
-  { label: "永久", value: "0" },
-  { label: "1 天", value: "86400" },
-  { label: "7 天", value: "604800" },
-  { label: "30 天", value: "2592000" }
-];
+const expireOptions = computed(() => [
+  { label: t("share.options.forever"), value: "0" },
+  { label: t("share.options.day1"), value: "86400" },
+  { label: t("share.options.day7"), value: "604800" },
+  { label: t("share.options.day30"), value: "2592000" }
+]);
 const shareForm = reactive({
   localPath: "",
   password: "",
@@ -137,7 +140,7 @@ const handleShareDialogClose = () => {
 const submitShareLink = async () => {
   const password = shareForm.password.trim();
   if (password && !/^[a-zA-Z0-9]+$/.test(password)) {
-    ElMessage.error("提取密码仅支持字母和数字");
+    ElMessage.error(t("share.passwordRule"));
     return;
   }
   shareForm.loading = true;
@@ -152,11 +155,11 @@ const submitShareLink = async () => {
       expire_seconds: expireSeconds
     });
     shareForm.shareLink = link;
-    ElMessage.success("分享链接已生成");
+    ElMessage.success(t("share.generated"));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     shareForm.error = message;
-    ElMessage.error(`创建分享链接失败: ${message}`);
+    ElMessage.error(t("share.createFailed", { msg: message }));
   } finally {
     shareForm.loading = false;
   }
@@ -168,10 +171,10 @@ const copyShareLink = async () => {
   }
   try {
     await navigator.clipboard.writeText(shareForm.shareLink);
-    ElMessage.success("已复制分享链接");
+    ElMessage.success(t("share.copied"));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    ElMessage.error(`复制失败: ${message}`);
+    ElMessage.error(t("share.copyFailed", { msg: message }));
   }
 };
 
@@ -183,7 +186,7 @@ const openShareLink = async () => {
     await openExternal(shareForm.shareLink);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    ElMessage.error(`打开失败: ${message}`);
+    ElMessage.error(t("share.openFailed", { msg: message }));
   }
 };
 

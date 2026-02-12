@@ -1,55 +1,57 @@
 <template>
   <section class="tasks-view">
     <div class="toolbar">
-      <el-button type="primary" @click="wizardVisible = true">+ 新建任务</el-button>
+      <el-button type="primary" @click="wizardVisible = true">+ {{ t("tasks.newTask") }}</el-button>
       <div class="toolbar-actions">
-        <el-button @click="refresh">刷新</el-button>
+        <el-button @click="refresh">{{ t("tasks.refresh") }}</el-button>
       </div>
       <div class="toolbar-filters">
-        <el-checkbox v-model="onlyErrors">仅错误</el-checkbox>
-        <el-checkbox v-model="onlyConflicts">仅冲突</el-checkbox>
-        <el-checkbox v-model="recent">最近活跃</el-checkbox>
+        <el-checkbox v-model="onlyErrors">{{ t("tasks.onlyErrors") }}</el-checkbox>
+        <el-checkbox v-model="onlyConflicts">{{ t("tasks.onlyConflicts") }}</el-checkbox>
+        <el-checkbox v-model="recent">{{ t("tasks.recentActive") }}</el-checkbox>
       </div>
     </div>
 
     <el-table :data="filtered" class="table-flat">
-      <el-table-column prop="name" label="任务名" width="160" />
-      <el-table-column prop="mode" label="模式" width="100" />
-      <el-table-column prop="local_path" label="本地目录" />
-      <el-table-column prop="remote_path" label="云端目录" />
-      <el-table-column prop="progress_text" label="进度" width="240" />
-      <el-table-column label="状态" width="140">
+      <el-table-column prop="name" :label="t('tasks.tableName')" width="160" />
+      <el-table-column prop="mode" :label="t('tasks.tableMode')" width="100">
+        <template #default="{ row }">{{ localizedMode(row.mode) }}</template>
+      </el-table-column>
+      <el-table-column prop="local_path" :label="t('tasks.tableLocal')" />
+      <el-table-column prop="remote_path" :label="t('tasks.tableRemote')" />
+      <el-table-column prop="progress_text" :label="t('tasks.tableProgress')" width="240" />
+      <el-table-column :label="t('tasks.tableStatus')" width="140">
         <template #default="{ row }">
-          <el-tag :type="statusTone(row.status)" effect="dark">{{ row.status }}</el-tag>
+          <el-tag :type="statusTone(row.status)" effect="dark">{{ localizedStatus(row.status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="220">
+      <el-table-column :label="t('tasks.tableActions')" width="220">
         <template #default="{ row }">
           <el-button size="small" @click="toggleSync(row)">
-            {{ isRunningStatus(row.status) ? "暂停" : "同步" }}
+            {{ isRunningStatus(row.status) ? t("dashboard.pause") : t("dashboard.sync") }}
           </el-button>
-          <el-button size="small" plain @click="removeTask(row)">移除</el-button>
+          <el-button size="small" plain @click="removeTask(row)">{{ t("tasks.remove") }}</el-button>
         </template>
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="wizardVisible" title="新建同步任务" width="720px">
+    <el-dialog v-model="wizardVisible" :title="t('tasks.wizardTitle')" width="720px">
       <el-steps :active="step" finish-status="success" align-center>
-        <el-step title="账号与站点" />
-        <el-step title="选择目录" />
-        <el-step title="策略确认" />
-        <el-step title="首次同步" />
+        <el-step :title="t('tasks.stepAccount')" />
+        <el-step :title="t('tasks.stepDirectory')" />
+        <el-step :title="t('tasks.stepStrategy')" />
+        <el-step :title="t('tasks.stepFirstSync')" />
       </el-steps>
 
       <div class="wizard-body" v-if="step === 0">
         <el-select
           v-if="accounts.length"
           v-model="selectedAccountKey"
-          placeholder="选择已有账号（可选）"
+          :placeholder="t('tasks.selectExisting')"
           clearable
           @change="applyAccountSelection"
         >
-          <el-option :key="NEW_ACCOUNT_KEY" label="连接新账号" :value="NEW_ACCOUNT_KEY" />
+          <el-option :key="NEW_ACCOUNT_KEY" :label="t('tasks.connectNew')" :value="NEW_ACCOUNT_KEY" />
           <el-option
             v-for="item in accounts"
             :key="item.account_key"
@@ -58,22 +60,26 @@
           />
         </el-select>
         <el-input v-model="wizard.base_url" placeholder="Cloudreve Base URL" :disabled="usingExistingAccount" />
-        <el-input v-model="wizard.email" placeholder="邮箱" :disabled="usingExistingAccount" />
+        <el-input v-model="wizard.email" :placeholder="t('tasks.emailPlaceholder')" :disabled="usingExistingAccount" />
         <el-input
           v-if="!usingExistingAccount"
           v-model="wizard.password"
-          placeholder="密码"
+          :placeholder="t('tasks.passwordPlaceholder')"
           type="password"
           show-password
         />
-        <el-input v-if="!usingExistingAccount" v-model="wizard.captcha" placeholder="验证码" />
-        <el-input v-if="!usingExistingAccount" v-model="wizard.ticket" placeholder="Captcha Ticket（自动填充）" />
+        <el-input v-if="!usingExistingAccount" v-model="wizard.captcha" :placeholder="t('tasks.captchaPlaceholder')" />
+        <el-input
+          v-if="!usingExistingAccount"
+          v-model="wizard.ticket"
+          :placeholder="t('tasks.ticketPlaceholder')"
+        />
         <el-button
           type="primary"
           :loading="loginLoading"
           @click="usingExistingAccount ? doUseAccount() : doLogin()"
         >
-          {{ usingExistingAccount ? "使用已保存账号" : "登录并测试连接" }}
+          {{ usingExistingAccount ? t("tasks.useSavedAccount") : t("tasks.loginAndTest") }}
         </el-button>
         <el-button
           v-if="!usingExistingAccount"
@@ -82,14 +88,18 @@
           plain
           @click="fetchCaptcha"
         >
-          {{ captchaCooldown > 0 ? `刷新验证码 (${captchaCooldown}s)` : "刷新验证码" }}
+          {{
+            captchaCooldown > 0
+              ? t("tasks.refreshCaptchaCountdown", { seconds: captchaCooldown })
+              : t("tasks.refreshCaptcha")
+          }}
         </el-button>
         <el-alert
           v-if="!usingExistingAccount"
           type="info"
           show-icon
           :closable="false"
-          title="请先填写 Base URL，再点击“刷新验证码”获取图片。"
+          :title="t('tasks.captchaHint')"
         />
         <el-alert v-if="loginError" type="error" show-icon :closable="false" :title="loginError" />
         <div v-if="captchaImage && !usingExistingAccount" class="captcha-preview">
@@ -98,91 +108,91 @@
       </div>
 
       <div class="wizard-body" v-else-if="step === 1">
-        <el-input v-model="wizard.task_name" placeholder="任务名称" />
-        <el-input v-model="wizard.local_root" placeholder="本地目录">
+        <el-input v-model="wizard.task_name" :placeholder="t('tasks.taskNamePlaceholder')" />
+        <el-input v-model="wizard.local_root" :placeholder="t('tasks.localDirPlaceholder')">
           <template #append>
-            <el-button @click="browseLocalRoot">浏览</el-button>
+            <el-button @click="browseLocalRoot">{{ t("tasks.browse") }}</el-button>
           </template>
         </el-input>
-        <el-input v-model="wizard.remote_root_uri" placeholder="云端目录 (URI 或路径)">
+        <el-input v-model="wizard.remote_root_uri" :placeholder="t('tasks.remoteDirPlaceholder')">
           <template #append>
-            <el-button :disabled="!wizard.account_key" @click="openRemoteBrowser">浏览</el-button>
+            <el-button :disabled="!wizard.account_key" @click="openRemoteBrowser">{{ t("tasks.browse") }}</el-button>
           </template>
         </el-input>
       </div>
 
       <div class="wizard-body" v-else-if="step === 2">
         <el-radio-group v-model="wizard.mode">
-          <el-radio label="双向">双向同步（默认）</el-radio>
-          <el-radio label="单向→">本地 → 云端</el-radio>
-          <el-radio label="单向←">云端 → 本地</el-radio>
+          <el-radio label="Bidirectional">{{ t("tasks.modeBoth") }}</el-radio>
+          <el-radio label="UploadOnly">{{ t("tasks.modeUploadOnly") }}</el-radio>
+          <el-radio label="DownloadOnly">{{ t("tasks.modeDownloadOnly") }}</el-radio>
         </el-radio-group>
-        <el-alert type="info" show-icon title="冲突双保留与软删除策略不可修改" />
+        <el-alert type="info" show-icon :title="t('tasks.strategyHint')" />
       </div>
 
       <div class="wizard-body" v-else>
         <el-radio-group v-model="wizard.first_sync">
-          <el-radio label="sync">立即同步</el-radio>
-          <el-radio label="index">仅建立索引</el-radio>
+          <el-radio label="sync">{{ t("tasks.firstSyncNow") }}</el-radio>
+          <el-radio label="index">{{ t("tasks.firstSyncIndexOnly") }}</el-radio>
         </el-radio-group>
-        <el-input-number v-model="wizard.sync_interval_secs" :min="5" label="同步间隔 (秒)" />
+        <el-input-number v-model="wizard.sync_interval_secs" :min="5" :label="t('tasks.syncIntervalLabel')" />
       </div>
 
       <template #footer>
         <div class="wizard-footer">
-          <el-button @click="wizardVisible = false">取消</el-button>
-          <el-button :disabled="step === 0" @click="step--">上一步</el-button>
+          <el-button @click="wizardVisible = false">{{ t("tasks.cancel") }}</el-button>
+          <el-button :disabled="step === 0" @click="step--">{{ t("tasks.previous") }}</el-button>
           <el-button v-if="step < 3" type="primary" :loading="nextLoading" @click="goNext">
-            下一步
+            {{ t("tasks.next") }}
           </el-button>
           <el-button v-else type="primary" :loading="createLoading" @click="submitTask">
-            创建任务
+            {{ t("tasks.createTaskAction") }}
           </el-button>
         </div>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="twoFaVisible" title="需要两步验证" width="420px">
+    <el-dialog v-model="twoFaVisible" :title="t('tasks.twoFaTitle')" width="420px">
       <div class="wizard-body">
-        <el-input v-model="twoFaCode" placeholder="请输入 2FA 验证码" />
+        <el-input v-model="twoFaCode" :placeholder="t('tasks.twoFaPlaceholder')" />
         <el-alert
           type="info"
           show-icon
           :closable="false"
-          title="请输入账号的两步验证码（TOTP）。"
+          :title="t('tasks.twoFaHint')"
         />
       </div>
       <template #footer>
         <div class="wizard-footer">
-          <el-button @click="twoFaVisible = false">取消</el-button>
+          <el-button @click="twoFaVisible = false">{{ t("tasks.cancel") }}</el-button>
           <el-button type="primary" :loading="twoFaLoading" @click="submitTwoFa">
-            验证并登录
+            {{ t("tasks.verifyAndLogin") }}
           </el-button>
         </div>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="remoteBrowserVisible" title="选择云端目录" width="640px">
+    <el-dialog v-model="remoteBrowserVisible" :title="t('tasks.remotePickerTitle')" width="640px">
       <div class="wizard-body">
         <div class="remote-browser-header">
-          <el-button size="small" plain @click="goRemoteParent">上一级</el-button>
+          <el-button size="small" plain @click="goRemoteParent">{{ t("tasks.parent") }}</el-button>
           <span class="remote-browser-path">{{ remoteBrowserUri }}</span>
         </div>
         <el-table :data="remoteBrowserEntries" height="320" v-loading="remoteBrowserLoading">
-          <el-table-column label="名称">
+          <el-table-column :label="t('tasks.name')">
             <template #default="{ row }">
               <span>{{ row.name }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="类型" width="120">
+          <el-table-column :label="t('tasks.type')" width="120">
             <template #default="{ row }">
-              {{ row.is_dir ? "目录" : "文件" }}
+              {{ row.is_dir ? t("tasks.dir") : t("tasks.file") }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="140">
+          <el-table-column :label="t('tasks.tableActions')" width="140">
             <template #default="{ row }">
               <el-button size="small" :disabled="!row.is_dir" @click="enterRemote(row)">
-                打开
+                {{ t("tasks.open") }}
               </el-button>
             </template>
           </el-table-column>
@@ -190,8 +200,8 @@
       </div>
       <template #footer>
         <div class="wizard-footer">
-          <el-button @click="remoteBrowserVisible = false">取消</el-button>
-          <el-button type="primary" @click="selectRemoteCurrent">选择当前目录</el-button>
+          <el-button @click="remoteBrowserVisible = false">{{ t("tasks.cancel") }}</el-button>
+          <el-button type="primary" @click="selectRemoteCurrent">{{ t("tasks.selectCurrentDir") }}</el-button>
         </div>
       </template>
     </el-dialog>
@@ -203,6 +213,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useI18n } from "vue-i18n";
 import type { TaskItem, AccountItem, RemoteEntry, TaskRuntimePayload } from "../services/types";
 import {
   createTask,
@@ -243,6 +254,7 @@ const remoteBrowserUri = ref("cloudreve://my");
 const remoteBrowserLoading = ref(false);
 const createLoading = ref(false);
 let unlistenTaskRuntime: UnlistenFn | null = null;
+const { t } = useI18n();
 
 const NEW_ACCOUNT_KEY = "__new__";
 
@@ -256,7 +268,7 @@ const wizard = ref({
   task_name: "",
   local_root: "",
   remote_root_uri: "",
-  mode: "双向",
+  mode: "Bidirectional",
   first_sync: "sync",
   sync_interval_secs: 60
 });
@@ -300,6 +312,23 @@ const filtered = computed(() => {
 
 const isRunningStatus = (status: string) => ["Syncing", "Hashing", "ListingRemote"].includes(status);
 
+const localizedStatus = (status: string) => {
+  if (status === "Syncing") return t("common.statusSyncing");
+  if (status === "Hashing") return t("common.statusHashing");
+  if (status === "ListingRemote") return t("common.statusListingRemote");
+  if (status === "Paused") return t("common.statusPaused");
+  if (status === "Error") return t("common.statusError");
+  if (status === "Conflict") return t("common.statusConflict");
+  return status;
+};
+
+const localizedMode = (mode: string) => {
+  if (mode === "双向" || mode === "Bidirectional") return t("tasks.modeBoth");
+  if (mode === "单向→" || mode === "UploadOnly") return t("tasks.modeUploadOnly");
+  if (mode === "单向←" || mode === "DownloadOnly") return t("tasks.modeDownloadOnly");
+  return mode;
+};
+
 const statusTone = (status: string) => {
   if (isRunningStatus(status)) return "success";
   if (status === "Error") return "danger";
@@ -313,7 +342,7 @@ const formatError = (err: unknown) => {
   if (err && typeof err === "object" && "message" in err && typeof err.message === "string") {
     return err.message;
   }
-  return "未知错误";
+  return t("tasks.unknownError");
 };
 
 const doLogin = async () => {
@@ -331,15 +360,15 @@ const doLogin = async () => {
       twoFaSessionId.value = result.session_id;
       twoFaCode.value = "";
       twoFaVisible.value = true;
-      ElMessage.warning("需要两步验证，请输入验证码");
+      ElMessage.warning(t("tasks.twoFaRequired"));
       return;
     }
     await testConnection(result.account_key, wizard.value.base_url);
     wizard.value.account_key = result.account_key;
     await loadAccounts();
-    ElMessage.success("登录并连接成功");
+    ElMessage.success(t("tasks.loginSuccess"));
   } catch (err) {
-    const message = `登录失败：${formatError(err)}`;
+    const message = t("tasks.loginFailed", { msg: formatError(err) });
     ElMessage.error(message);
     loginError.value = message;
   } finally {
@@ -349,16 +378,16 @@ const doLogin = async () => {
 
 const doUseAccount = async () => {
   if (!wizard.value.account_key) {
-    ElMessage.error("请选择已有账号");
+    ElMessage.error(t("tasks.selectExistingFirst"));
     return;
   }
   try {
     loginLoading.value = true;
     loginError.value = "";
     await testConnection(wizard.value.account_key, wizard.value.base_url);
-    ElMessage.success("连接成功");
+    ElMessage.success(t("tasks.connectSuccess"));
   } catch (err) {
-    const message = `连接失败：${formatError(err)}`;
+    const message = t("tasks.connectFailed", { msg: formatError(err) });
     ElMessage.error(message);
     loginError.value = message;
   } finally {
@@ -368,7 +397,7 @@ const doUseAccount = async () => {
 
 const fetchCaptcha = async () => {
   if (!wizard.value.base_url) {
-    ElMessage.warning("请先填写 Base URL");
+    ElMessage.warning(t("tasks.fillBaseUrlFirst"));
     return;
   }
   try {
@@ -378,10 +407,10 @@ const fetchCaptcha = async () => {
     wizard.value.ticket = data.ticket;
     wizard.value.captcha = "";
     captchaImage.value = data.image;
-    ElMessage.success("验证码已刷新");
+    ElMessage.success(t("tasks.captchaRefreshed"));
     captchaCooldown.value = 15;
   } catch (err) {
-    const message = `刷新验证码失败：${formatError(err)}`;
+    const message = t("tasks.captchaRefreshFailed", { msg: formatError(err) });
     ElMessage.error(message);
     loginError.value = message;
   } finally {
@@ -394,7 +423,7 @@ const browseLocalRoot = async () => {
     const selected = (await open({
       directory: true,
       multiple: false,
-      title: "选择本地目录"
+      title: t("tasks.pickLocalDir")
     })) as string | string[] | null;
     if (typeof selected === "string") {
       wizard.value.local_root = selected;
@@ -402,7 +431,7 @@ const browseLocalRoot = async () => {
       wizard.value.local_root = selected[0];
     }
   } catch (err) {
-    ElMessage.error(`打开本地目录失败：${formatError(err)}`);
+    ElMessage.error(t("tasks.openLocalDirFailed", { msg: formatError(err) }));
   }
 };
 
@@ -432,7 +461,7 @@ const parentRemoteUri = (uri: string) => {
 
 const loadRemoteEntries = async () => {
   if (!wizard.value.account_key) {
-    ElMessage.error("请先登录并验证连接");
+    ElMessage.error(t("tasks.loginRequiredForRemote"));
     return;
   }
   remoteBrowserLoading.value = true;
@@ -447,7 +476,7 @@ const loadRemoteEntries = async () => {
       return a.name.localeCompare(b.name);
     });
   } catch (err) {
-    ElMessage.error(`获取云端目录失败：${formatError(err)}`);
+    ElMessage.error(t("tasks.listRemoteFailed", { msg: formatError(err) }));
   } finally {
     remoteBrowserLoading.value = false;
   }
@@ -455,7 +484,7 @@ const loadRemoteEntries = async () => {
 
 const openRemoteBrowser = async () => {
   if (!wizard.value.account_key) {
-    ElMessage.error("请先登录并验证连接");
+    ElMessage.error(t("tasks.loginRequiredForRemote"));
     return;
   }
   remoteBrowserUri.value = normalizeRemoteUri(wizard.value.remote_root_uri);
@@ -483,7 +512,7 @@ const selectRemoteCurrent = () => {
 
 const submitTwoFa = async () => {
   if (!twoFaCode.value.trim()) {
-    ElMessage.error("请输入 2FA 验证码");
+    ElMessage.error(t("tasks.enterTwoFa"));
     return;
   }
   try {
@@ -496,7 +525,7 @@ const submitTwoFa = async () => {
       opt: twoFaCode.value.trim()
     });
     if (result.status !== "success") {
-      ElMessage.error("2FA 验证失败，请重试");
+      ElMessage.error(t("tasks.twoFaFailedRetry"));
       return;
     }
     await testConnection(result.account_key, wizard.value.base_url);
@@ -505,9 +534,9 @@ const submitTwoFa = async () => {
     twoFaVisible.value = false;
     twoFaSessionId.value = "";
     twoFaCode.value = "";
-    ElMessage.success("登录并连接成功");
+    ElMessage.success(t("tasks.loginSuccess"));
   } catch (err) {
-    const message = `2FA 验证失败：${formatError(err)}`;
+    const message = t("tasks.twoFaFailed", { msg: formatError(err) });
     ElMessage.error(message);
     loginError.value = message;
   } finally {
@@ -543,15 +572,15 @@ const applyAccountSelection = () => {
 
 const validateStepZero = () => {
   if (!wizard.value.base_url.trim()) {
-    ElMessage.error("请填写 Base URL");
+    ElMessage.error(t("tasks.fillBaseUrl"));
     return false;
   }
   if (!wizard.value.email.trim()) {
-    ElMessage.error("请填写邮箱");
+    ElMessage.error(t("tasks.fillEmail"));
     return false;
   }
   if (!usingExistingAccount.value && !wizard.value.password) {
-    ElMessage.error("请填写密码");
+    ElMessage.error(t("tasks.fillPassword"));
     return false;
   }
   return true;
@@ -579,13 +608,13 @@ const goNext = async () => {
 
 const submitTask = async () => {
   if (!wizard.value.account_key) {
-    ElMessage.error("请先登录并验证连接");
+    ElMessage.error(t("tasks.loginRequiredForRemote"));
     return;
   }
   try {
     createLoading.value = true;
     const createdTaskId = await createTask({
-      name: wizard.value.task_name || "新任务",
+      name: wizard.value.task_name || t("tasks.defaultTaskName"),
       base_url: wizard.value.base_url,
       account_key: wizard.value.account_key,
       local_root: wizard.value.local_root,
@@ -603,9 +632,9 @@ const submitTask = async () => {
       await runSync({ task_id: createdTaskId });
       await refresh();
     }
-    ElMessage.success("任务已创建");
+    ElMessage.success(t("tasks.taskCreated"));
   } catch (err) {
-    ElMessage.error(`创建任务失败：${formatError(err)}`);
+    ElMessage.error(t("tasks.createTaskFailed", { msg: formatError(err) }));
   } finally {
     createLoading.value = false;
   }
@@ -623,12 +652,12 @@ const toggleSync = async (row: TaskItem) => {
 const removeTask = async (row: TaskItem) => {
   try {
     await ElMessageBox.confirm(
-      `确定要移除任务 “${row.name}” 吗？`,
-      "移除任务",
+      t("tasks.removeTaskConfirm", { name: row.name }),
+      t("tasks.removeTaskTitle"),
       {
         type: "warning",
-        confirmButtonText: "移除",
-        cancelButtonText: "取消"
+        confirmButtonText: t("tasks.removeConfirm"),
+        cancelButtonText: t("tasks.cancel")
       }
     );
   } catch {
@@ -637,9 +666,9 @@ const removeTask = async (row: TaskItem) => {
   try {
     await deleteTask({ task_id: row.id });
     await refresh();
-    ElMessage.success("任务已移除");
+    ElMessage.success(t("tasks.taskRemoved"));
   } catch (err) {
-    ElMessage.error(`移除失败：${formatError(err)}`);
+    ElMessage.error(t("tasks.removeFailed", { msg: formatError(err) }));
   }
 };
 

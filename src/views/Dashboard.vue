@@ -11,10 +11,10 @@
       <el-card class="panel">
         <div class="panel-header">
           <div>
-            <div class="panel-title">当前任务</div>
-            <div class="panel-subtitle">最近活动的同步任务</div>
+            <div class="panel-title">{{ t("dashboard.currentTasks") }}</div>
+            <div class="panel-subtitle">{{ t("dashboard.currentTasksSub") }}</div>
           </div>
-          <el-button type="primary" plain @click="gotoTasks">查看全部</el-button>
+          <el-button type="primary" plain @click="gotoTasks">{{ t("dashboard.viewAll") }}</el-button>
         </div>
         <div class="task-list">
           <div v-for="task in tasks" :key="task.id" class="task-row">
@@ -23,16 +23,18 @@
               <div class="task-path">{{ task.local_path }} → {{ task.remote_path }}</div>
             </div>
             <div class="task-meta">
-              <el-tag :type="statusTone(task.status)" effect="dark">{{ task.status }}</el-tag>
+              <el-tag :type="statusTone(task.status)" effect="dark">{{ localizedStatus(task.status) }}</el-tag>
               <div class="task-queue">{{ task.progress_text }}</div>
               <div class="task-rate">↑ {{ task.rate_up }} ↓ {{ task.rate_down }}</div>
-              <div class="task-queue">队列 {{ task.queue }}</div>
+              <div class="task-queue">{{ t("dashboard.queue") }} {{ task.queue }}</div>
             </div>
             <div class="task-actions">
               <el-button size="small" @click="toggleSync(task)">
-                {{ isRunningStatus(task.status) ? "暂停" : "同步" }}
+                {{ isRunningStatus(task.status) ? t("dashboard.pause") : t("dashboard.sync") }}
               </el-button>
-              <el-button size="small" type="primary" @click="openTaskFolder(task)">打开目录</el-button>
+              <el-button size="small" type="primary" @click="openTaskFolder(task)">
+                {{ t("dashboard.openFolder") }}
+              </el-button>
             </div>
           </div>
         </div>
@@ -41,10 +43,10 @@
       <el-card class="panel">
         <div class="panel-header">
           <div>
-            <div class="panel-title">最近活动</div>
-            <div class="panel-subtitle">上传 / 下载 / 冲突 / 删除</div>
+            <div class="panel-title">{{ t("dashboard.recent") }}</div>
+            <div class="panel-subtitle">{{ t("dashboard.recentSub") }}</div>
           </div>
-          <el-button type="primary" plain @click="gotoLogs">查看日志</el-button>
+          <el-button type="primary" plain @click="gotoLogs">{{ t("dashboard.viewLogs") }}</el-button>
         </div>
         <el-timeline class="activity-timeline">
           <el-timeline-item
@@ -68,6 +70,7 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import type { ActivityItem, DashboardCard, TaskItem, TaskRuntimePayload } from "../services/types";
 import { fetchBootstrap } from "../services/bootstrap";
 import { openLocalPath, runSync, stopSync } from "../services/api";
@@ -76,8 +79,41 @@ const cards = ref<DashboardCard[]>([]);
 const tasks = ref<TaskItem[]>([]);
 const activities = ref<ActivityItem[]>([]);
 const router = useRouter();
+const { t } = useI18n();
 let unlistenTaskRuntime: UnlistenFn | null = null;
 const isRunningStatus = (status: string) => ["Syncing", "Hashing", "ListingRemote"].includes(status);
+
+const localizedStatus = (status: string) => {
+  if (status === "Syncing") return t("common.statusSyncing");
+  if (status === "Hashing") return t("common.statusHashing");
+  if (status === "ListingRemote") return t("common.statusListingRemote");
+  if (status === "Paused") return t("common.statusPaused");
+  if (status === "Error") return t("common.statusError");
+  if (status === "Conflict") return t("common.statusConflict");
+  return status;
+};
+
+const localizedCard = (card: DashboardCard): DashboardCard => {
+  let label = card.label;
+  let value = card.value;
+  if (card.label === "同步状态") {
+    label = t("dashboard.cardSyncState");
+    value = card.value === "运行中" ? t("dashboard.running") : t("dashboard.paused");
+  } else if (card.label === "今日上传") {
+    label = t("dashboard.cardUploadToday");
+    if (card.value.endsWith(" 文件")) {
+      value = `${card.value.replace(" 文件", "")} ${t("dashboard.filesSuffix")}`;
+    }
+  } else if (card.label === "今日下载") {
+    label = t("dashboard.cardDownloadToday");
+    if (card.value.endsWith(" 文件")) {
+      value = `${card.value.replace(" 文件", "")} ${t("dashboard.filesSuffix")}`;
+    }
+  } else if (card.label === "未处理冲突") {
+    label = t("dashboard.cardConflicts");
+  }
+  return { ...card, label, value };
+};
 
 const applyTaskRuntime = (payload: TaskRuntimePayload) => {
   const index = tasks.value.findIndex(item => item.id === payload.task_id);
@@ -94,16 +130,17 @@ const applyTaskRuntime = (payload: TaskRuntimePayload) => {
     };
   }
   const syncing = tasks.value.some(item => isRunningStatus(item.status));
-  const syncCard = cards.value.find(item => item.label === "同步状态");
+  const syncCard = cards.value.find(item => item.tone === "success" || item.tone === "warn");
   if (syncCard) {
-    syncCard.value = syncing ? "运行中" : "已暂停";
+    syncCard.label = t("dashboard.cardSyncState");
+    syncCard.value = syncing ? t("dashboard.running") : t("dashboard.paused");
     syncCard.tone = syncing ? "success" : "warn";
   }
 };
 
 onMounted(async () => {
   const data = await fetchBootstrap();
-  cards.value = data.cards;
+  cards.value = data.cards.map(localizedCard);
   tasks.value = data.tasks;
   activities.value = data.activities;
   unlistenTaskRuntime = await listen<TaskRuntimePayload>("task-runtime", event => {

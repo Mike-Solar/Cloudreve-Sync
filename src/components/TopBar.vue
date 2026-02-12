@@ -7,7 +7,7 @@
     <div class="top-actions">
       <el-input
         v-model="query"
-        placeholder="搜索任务 / 文件 / 日志"
+        :placeholder="t('topbar.searchPlaceholder')"
         class="search-input"
         size="large"
         @input="scheduleSearch"
@@ -15,42 +15,48 @@
       />
       <el-card v-if="showResults" class="search-results">
         <div class="search-section" v-if="taskResults.length">
-          <div class="search-title">任务</div>
+          <div class="search-title">{{ t("topbar.tasks") }}</div>
           <div class="search-item" v-for="task in taskResults" :key="task.id" @click="gotoTask(task)">
             <strong>{{ task.name }}</strong>
             <span>{{ task.local_path }} → {{ task.remote_path }}</span>
-            <el-button size="small" text @click.stop="openTaskFolder(task)">打开目录</el-button>
+            <el-button size="small" text @click.stop="openTaskFolder(task)">
+              {{ t("topbar.openFolder") }}
+            </el-button>
           </div>
         </div>
         <div class="search-section" v-if="logResults.length">
-          <div class="search-title">日志</div>
+          <div class="search-title">{{ t("topbar.logs") }}</div>
           <div class="search-item" v-for="log in logResults" :key="log.timestamp + log.detail" @click="gotoLogs">
             <strong>{{ log.event }}</strong>
             <span>{{ log.detail }}</span>
           </div>
         </div>
         <div class="search-section" v-if="conflictResults.length">
-          <div class="search-title">冲突</div>
+          <div class="search-title">{{ t("topbar.conflicts") }}</div>
           <div class="search-item" v-for="conflict in conflictResults" :key="conflict.id" @click="gotoConflicts">
             <strong>{{ conflict.name }}</strong>
             <span>{{ conflict.path }}</span>
-            <el-button size="small" text @click.stop="openConflictFolder(conflict)">打开目录</el-button>
-            <el-button size="small" text @click.stop="downloadConflict(conflict)">下载云端</el-button>
+            <el-button size="small" text @click.stop="openConflictFolder(conflict)">
+              {{ t("topbar.openFolder") }}
+            </el-button>
+            <el-button size="small" text @click.stop="downloadConflict(conflict)">
+              {{ t("topbar.downloadRemote") }}
+            </el-button>
           </div>
         </div>
         <div class="search-empty" v-if="!taskResults.length && !logResults.length && !conflictResults.length">
-          暂无匹配结果
+          {{ t("topbar.noResults") }}
         </div>
       </el-card>
       <el-dropdown>
         <span class="account">
-          账户：{{ activeAccountLabel }}
+          {{ t("topbar.account") }}: {{ activeAccountLabel }}
           <el-icon><arrow-down /></el-icon>
         </span>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item @click="gotoTasks">切换站点</el-dropdown-item>
-            <el-dropdown-item @click="logout">退出登录</el-dropdown-item>
+            <el-dropdown-item @click="gotoTasks">{{ t("topbar.switchSite") }}</el-dropdown-item>
+            <el-dropdown-item @click="logout">{{ t("topbar.logout") }}</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -62,6 +68,7 @@
 import { computed, onMounted, ref } from "vue";
 import { ArrowDown } from "@element-plus/icons-vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { clearCredentials, listAccounts, listConflicts, listLogs, listTasks, openLocalPath, downloadConflictRemote } from "../services/api";
 import type { AccountItem, ConflictItem, ActivityItem, TaskItem } from "../services/types";
 import { ElMessage } from "element-plus";
@@ -75,10 +82,11 @@ const logResults = ref<ActivityItem[]>([]);
 const conflictResults = ref<ConflictItem[]>([]);
 const showResults = ref(false);
 const router = useRouter();
+const { t } = useI18n();
 let searchTimer: number | null = null;
 
 const activeAccountLabel = computed(() => {
-  if (!accounts.value.length) return "未登录";
+  if (!accounts.value.length) return t("topbar.notLoggedIn");
   return accounts.value[0].email;
 });
 
@@ -96,7 +104,7 @@ const scheduleSearch = () => {
       showResults.value = false;
       return;
     }
-    const [tasks, logs, conflicts] = await Promise.all([
+    const [tasks, logsPage, conflicts] = await Promise.all([
       listTasks(),
       listLogs({}),
       listConflicts()
@@ -104,7 +112,7 @@ const scheduleSearch = () => {
     taskResults.value = tasks.filter(item =>
       `${item.name} ${item.local_path} ${item.remote_path}`.toLowerCase().includes(term)
     ).slice(0, 6);
-    logResults.value = logs.filter(item =>
+    logResults.value = logsPage.items.filter(item =>
       `${item.event} ${item.detail}`.toLowerCase().includes(term)
     ).slice(0, 6);
     conflictResults.value = conflicts.filter(item =>
@@ -136,7 +144,7 @@ const gotoTasks = async () => {
 const logout = async () => {
   await clearCredentials();
   await loadAccounts();
-  ElMessage.success("已退出登录");
+  ElMessage.success(t("topbar.logoutSuccess"));
 };
 
 const openTaskFolder = async (task: TaskItem) => {
@@ -149,7 +157,7 @@ const openConflictFolder = async (conflict: ConflictItem) => {
 
 const downloadConflict = async (conflict: ConflictItem) => {
   await downloadConflictRemote(conflict.task_id, conflict.original_relpath);
-  ElMessage.success("已打开下载链接");
+  ElMessage.success(t("topbar.downloadOpened"));
 };
 
 onMounted(loadAccounts);

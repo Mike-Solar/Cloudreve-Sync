@@ -70,7 +70,7 @@ fn db_init_and_crud() {
         created_at_ms: now_ms(),
     };
     insert_log(&conn, &log).expect("insert log");
-    let logs = list_logs(&conn, Some(&task.task_id), None).expect("list logs");
+    let logs = list_logs(&conn, Some(&task.task_id), None, None, None).expect("list logs");
     assert_eq!(logs.len(), 1);
 }
 
@@ -207,13 +207,13 @@ fn db_filters_and_updates() {
     insert_log(&conn, &log_info).expect("insert log info");
     insert_log(&conn, &log_warn).expect("insert log warn");
     assert_eq!(
-        list_logs(&conn, Some(&task_a.task_id), Some("info"))
+        list_logs(&conn, Some(&task_a.task_id), Some("info"), None, None)
             .expect("list logs info")
             .len(),
         1
     );
     assert_eq!(
-        list_logs(&conn, Some(&task_a.task_id), Some("warn"))
+        list_logs(&conn, Some(&task_a.task_id), Some("warn"), None, None)
             .expect("list logs warn")
             .len(),
         1
@@ -290,7 +290,7 @@ fn delete_task_removes_related_rows() {
     assert!(list_conflicts(&conn, Some(&task.task_id))
         .expect("list conflicts")
         .is_empty());
-    assert!(list_logs(&conn, Some(&task.task_id), None)
+    assert!(list_logs(&conn, Some(&task.task_id), None, None, None)
         .expect("list logs")
         .is_empty());
 }

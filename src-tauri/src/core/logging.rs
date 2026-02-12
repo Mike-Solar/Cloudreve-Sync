@@ -111,7 +111,7 @@ mod tests {
         let store = LogStore::new(file.path().to_path_buf());
         let entry = LogEntry::new("task-1", LogLevel::Warn, "sync", "detail");
         store.append(&mut conn, &entry).expect("append");
-        let logs = list_logs(&conn, Some("task-1"), Some("warn")).expect("logs");
+        let logs = list_logs(&conn, Some("task-1"), Some("warn"), None, None).expect("logs");
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].event, "sync");
     }

@@ -4,56 +4,58 @@
       <el-card class="panel">
         <div class="panel-header">
           <div>
-            <div class="panel-title">冲突列表</div>
-            <div class="panel-subtitle">双保留策略下的冲突记录</div>
+            <div class="panel-title">{{ t("conflicts.listTitle") }}</div>
+            <div class="panel-subtitle">{{ t("conflicts.listSub") }}</div>
           </div>
-          <el-button @click="refresh">刷新</el-button>
+          <el-button @click="refresh">{{ t("conflicts.refresh") }}</el-button>
         </div>
-        <el-input v-model="search" placeholder="筛选文件名 / 目录" />
+        <el-input v-model="search" :placeholder="t('conflicts.filterPlaceholder')" />
         <el-table :data="filtered" height="420" class="table-flat" @row-click="selectConflict">
-          <el-table-column prop="name" label="文件名" />
-          <el-table-column prop="task" label="任务" width="120" />
-          <el-table-column prop="time" label="时间" width="160" />
-          <el-table-column prop="status" label="状态" width="100" />
+          <el-table-column prop="name" :label="t('conflicts.colName')" />
+          <el-table-column prop="task" :label="t('conflicts.colTask')" width="120" />
+          <el-table-column prop="time" :label="t('conflicts.colTime')" width="160" />
+          <el-table-column prop="status" :label="t('conflicts.colStatus')" width="100" />
         </el-table>
       </el-card>
 
       <el-card class="panel detail-panel" v-if="selected">
         <div class="panel-header">
           <div>
-            <div class="panel-title">冲突详情</div>
-            <div class="panel-subtitle">原文件与冲突副本双保留</div>
+            <div class="panel-title">{{ t("conflicts.detailTitle") }}</div>
+            <div class="panel-subtitle">{{ t("conflicts.detailSub") }}</div>
           </div>
-          <el-button type="primary" @click="markResolved">标记已处理</el-button>
+          <el-button type="primary" @click="markResolved">{{ t("conflicts.markResolved") }}</el-button>
         </div>
         <div class="conflict-summary">
           <div>
-            <div class="summary-label">原文件名（云端）</div>
+            <div class="summary-label">{{ t("conflicts.originalName") }}</div>
             <div class="summary-value">{{ selected.name }}</div>
           </div>
           <div>
-            <div class="summary-label">冲突副本</div>
-            <div class="summary-value">{{ selected.name }} (conflict-{{ selected.device || "LOCAL" }})</div>
+            <div class="summary-label">{{ t("conflicts.conflictCopy") }}</div>
+            <div class="summary-value">
+              {{ selected.name }} (conflict-{{ selected.device || t("conflicts.localDevice") }})
+            </div>
           </div>
           <div>
-            <div class="summary-label">目录路径</div>
+            <div class="summary-label">{{ t("conflicts.dirPath") }}</div>
             <div class="summary-value">{{ selected.path }}</div>
           </div>
         </div>
         <div class="compare-grid">
           <el-card class="compare-card">
-            <div class="compare-title">云端版本</div>
-            <div class="compare-item">mtime/sha256 见日志与元数据</div>
+            <div class="compare-title">{{ t("conflicts.remoteVersion") }}</div>
+            <div class="compare-item">{{ t("conflicts.versionHint") }}</div>
           </el-card>
           <el-card class="compare-card">
-            <div class="compare-title">冲突副本</div>
-            <div class="compare-item">mtime/sha256 见日志与元数据</div>
+            <div class="compare-title">{{ t("conflicts.localConflictVersion") }}</div>
+            <div class="compare-item">{{ t("conflicts.versionHint") }}</div>
           </el-card>
         </div>
         <div class="conflict-actions">
-          <el-button @click="downloadRemote">下载云端版本</el-button>
-          <el-button @click="openFolder">打开文件目录</el-button>
-          <el-button type="primary" plain @click="copySha256">复制 sha256</el-button>
+          <el-button @click="downloadRemote">{{ t("conflicts.downloadRemote") }}</el-button>
+          <el-button @click="openFolder">{{ t("conflicts.openFolder") }}</el-button>
+          <el-button type="primary" plain @click="copySha256">{{ t("conflicts.copySha256") }}</el-button>
         </div>
       </el-card>
     </div>
@@ -63,12 +65,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { ElMessage } from "element-plus";
+import { useI18n } from "vue-i18n";
 import type { ConflictItem } from "../services/types";
 import { downloadConflictRemote, hashLocalFile, listConflicts, markConflictResolved, openLocalPath } from "../services/api";
 
 const conflicts = ref<ConflictItem[]>([]);
 const selected = ref<ConflictItem | null>(null);
 const search = ref("");
+const { t } = useI18n();
 
 const refresh = async () => {
   conflicts.value = await listConflicts();
@@ -93,13 +97,13 @@ const markResolved = async () => {
   if (!selected.value) return;
   await markConflictResolved(selected.value.task_id, selected.value.conflict_relpath);
   await refresh();
-  ElMessage.success("已标记为处理");
+  ElMessage.success(t("conflicts.marked"));
 };
 
 const downloadRemote = async () => {
   if (!selected.value) return;
   await downloadConflictRemote(selected.value.task_id, selected.value.original_relpath);
-  ElMessage.success("已打开下载链接");
+  ElMessage.success(t("conflicts.openedDownload"));
 };
 
 const openFolder = async () => {
@@ -111,6 +115,6 @@ const copySha256 = async () => {
   if (!selected.value) return;
   const hash = await hashLocalFile(selected.value.local_path);
   await navigator.clipboard.writeText(hash);
-  ElMessage.success("已复制 sha256");
+  ElMessage.success(t("conflicts.copied"));
 };
 </script>

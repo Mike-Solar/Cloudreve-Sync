@@ -13,7 +13,9 @@ async fn list_files_calls_expected_endpoint() {
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/api/v4/file")
-            .query_param("uri", "cloudreve://my/Work");
+            .query_param("uri", "cloudreve://my/Work")
+            .query_param("page_size", "200")
+            .query_param("page", "1");
         then.status(200)
             .header("content-type", "application/json")
             .body(r#"{"code":0,"data":{"files":[],"next_marker":null},"msg":""}"#);
@@ -21,7 +23,7 @@ async fn list_files_calls_expected_endpoint() {
 
     let api_paths = ApiPaths::default();
     let client = CloudreveClient::new(server.url("/api/v4"), None, api_paths);
-    let result = client.list_files("cloudreve://my/Work", Some(1)).await;
+    let result = client.list_files("cloudreve://my/Work", Some(1), None).await;
     assert!(result.is_ok());
     mock.assert();
 }
@@ -33,6 +35,7 @@ async fn list_all_files_handles_pagination() {
         when.method(GET)
             .path("/api/v4/file")
             .query_param("uri", "cloudreve://root/Work")
+            .query_param("page_size", "200")
             .query_param("page", "1");
         then.status(200)
             .header("content-type", "application/json")
@@ -42,7 +45,8 @@ async fn list_all_files_handles_pagination() {
         when.method(GET)
             .path("/api/v4/file")
             .query_param("uri", "cloudreve://root/Work")
-            .query_param("page", "2");
+            .query_param("page_size", "200")
+            .query_param("next_page_token", "next");
         then.status(200)
             .header("content-type", "application/json")
             .body(r#"{"code":0,"data":{"files":[{"type":0,"id":"f2","name":"b.txt","size":2,"updated_at":"2024-01-01T00:00:00Z","path":"cloudreve://root/Work/b.txt","metadata":{}}],"next_marker":null},"msg":""}"#);
@@ -93,7 +97,9 @@ async fn list_files_returns_error_on_nonzero_code() {
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/api/v4/file")
-            .query_param("uri", "cloudreve://my/Work");
+            .query_param("uri", "cloudreve://my/Work")
+            .query_param("page_size", "200")
+            .query_param("page", "1");
         then.status(200)
             .header("content-type", "application/json")
             .body(r#"{"code":203,"data":"error-id","msg":""}"#);
@@ -101,7 +107,7 @@ async fn list_files_returns_error_on_nonzero_code() {
 
     let api_paths = ApiPaths::default();
     let client = CloudreveClient::new(server.url("/api/v4"), None, api_paths);
-    let result = client.list_files("cloudreve://my/Work", Some(1)).await;
+    let result = client.list_files("cloudreve://my/Work", Some(1), None).await;
     assert!(result.is_err());
     let message = result.err().unwrap().to_string();
     assert!(message.contains("203"));

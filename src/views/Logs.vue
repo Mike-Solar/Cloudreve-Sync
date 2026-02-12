@@ -3,30 +3,30 @@
     <el-card class="panel">
       <div class="panel-header">
         <div>
-          <div class="panel-title">活动日志</div>
-          <div class="panel-subtitle">任务级别的可追溯记录</div>
+          <div class="panel-title">{{ t("logs.title") }}</div>
+          <div class="panel-subtitle">{{ t("logs.sub") }}</div>
         </div>
         <div class="log-actions">
-          <el-button @click="refresh">刷新</el-button>
-          <el-button type="primary" plain @click="exportLogFile">导出日志</el-button>
-          <el-switch v-model="autoRefresh" active-text="实时刷新" />
+          <el-button @click="refresh">{{ t("logs.refresh") }}</el-button>
+          <el-button type="primary" plain @click="exportLogFile">{{ t("logs.export") }}</el-button>
+          <el-switch v-model="autoRefresh" :active-text="t('logs.autoRefresh')" />
         </div>
       </div>
       <div class="log-filters">
-        <el-input v-model="taskId" placeholder="任务 ID（可选）" />
-        <el-select v-model="level" placeholder="日志级别">
+        <el-input v-model="taskId" :placeholder="t('logs.taskIdPlaceholder')" />
+        <el-select v-model="level" :placeholder="t('logs.levelPlaceholder')">
           <el-option label="info" value="info" />
           <el-option label="warn" value="warn" />
           <el-option label="error" value="error" />
         </el-select>
-        <el-input v-model="search" placeholder="文件名 / 路径 / 错误码" />
+        <el-input v-model="search" :placeholder="t('logs.searchPlaceholder')" />
       </div>
       <div class="log-table" @scroll="handleTableScroll">
         <el-table :data="filtered" class="table-flat" height="100%">
-          <el-table-column prop="timestamp" label="时间" width="160" />
-          <el-table-column prop="event" label="类型" width="120" />
-          <el-table-column prop="detail" label="详情" />
-          <el-table-column prop="level" label="级别" width="100" />
+          <el-table-column prop="timestamp" :label="t('logs.colTime')" width="160" />
+          <el-table-column prop="event" :label="t('logs.colType')" width="120" />
+          <el-table-column prop="detail" :label="t('logs.colDetail')" />
+          <el-table-column prop="level" :label="t('logs.colLevel')" width="100" />
         </el-table>
       </div>
       <div class="log-pagination">
@@ -50,6 +50,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { ActivityItem, LogsPage } from "../services/types";
 import { exportLogs, listLogs, openLocalPath } from "../services/api";
 import { ElMessage } from "element-plus";
+import { useI18n } from "vue-i18n";
 
 const logs = ref<ActivityItem[]>([]);
 const search = ref("");
@@ -61,6 +62,7 @@ const total = ref(0);
 let refreshTimer: number | null = null;
 const autoRefresh = ref(true);
 let scrollResumeTimer: number | null = null;
+const { t } = useI18n();
 
 const refresh = async () => {
   const result: LogsPage = await listLogs({
@@ -154,7 +156,7 @@ const exportLogFile = async () => {
     level: level.value || undefined
   });
   await openLocalPath(path);
-  ElMessage.success("日志已导出");
+  ElMessage.success(t("logs.exported"));
 };
 
 watch(search, value => {

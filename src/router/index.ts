@@ -13,37 +13,37 @@ const router = createRouter({
       path: "/",
       name: "dashboard",
       component: DashboardView,
-      meta: { title: "概览", subtitle: "同步健康度与最近活动" }
+      meta: { title: "Overview", subtitle: "Sync health and recent activity" }
     },
     {
       path: "/tasks",
       name: "tasks",
       component: TasksView,
-      meta: { title: "同步任务", subtitle: "任务列表与运行状态" }
+      meta: { title: "Tasks", subtitle: "Task list and runtime status" }
     },
     {
       path: "/conflicts",
       name: "conflicts",
       component: ConflictsView,
-      meta: { title: "冲突中心", subtitle: "双保留策略下的冲突追踪" }
+      meta: { title: "Conflicts", subtitle: "Conflict tracking with dual-retention" }
     },
     {
       path: "/logs",
       name: "logs",
       component: LogsView,
-      meta: { title: "活动日志", subtitle: "可审计、可追溯的同步记录" }
+      meta: { title: "Activity Logs", subtitle: "Auditable and traceable sync records" }
     },
     {
       path: "/settings",
       name: "settings",
       component: SettingsView,
-      meta: { title: "设置", subtitle: "性能、网络与偏好" }
+      meta: { title: "Settings", subtitle: "Performance, network and preferences" }
     },
     {
       path: "/about",
       name: "about",
       component: AboutView,
-      meta: { title: "关于", subtitle: "诊断与版本信息" }
+      meta: { title: "About", subtitle: "Diagnostics and version info" }
     }
   ]
 });
